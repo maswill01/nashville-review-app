@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1c1917" />
+  <title>Nashville List</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-card" id="login-form">
+      <h1>Nashville</h1>
+      <p>Your places, your notes.</p>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required />
+      <button type="submit" id="submit">Enter</button>
+      <div class="login-error" id="error"></div>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const errorEl = document.getElementById('error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+      const btn = document.getElementById('submit');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: document.getElementById('password').value })
+        });
+        if (res.ok) {
+          window.location.href = '/';
+          return;
+        }
+        const body = await res.json().catch(() => ({}));
+        errorEl.textContent = body.error || 'Could not log in.';
+      } catch {
+        errorEl.textContent = 'Network problem. Try again.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

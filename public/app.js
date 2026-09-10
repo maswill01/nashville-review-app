@@ -40,6 +40,7 @@ const RATING_LABELS = {
 
 const CATEGORY_LABELS = {
   restaurant: 'Restaurant',
+  breakfast: 'Breakfast',
   bar: 'Bar',
   coffee: 'Coffee',
   music: 'Music',

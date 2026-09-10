@@ -1,4 +1,4 @@
-import { NEIGHBORHOOD_GROUPS, normalizeTags } from '/data/nashville.js';
+import { NEIGHBORHOOD_GROUPS, normalizeTags, isKnownNeighborhood } from '/data/nashville.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -290,7 +290,11 @@ function choosePlace(result) {
   $('#f-lng').value = result.lng ?? '';
   $('#f-place-id').value = result.providerId || '';
   $('#f-place-provider').value = result.provider || '';
-  if (result.neighborhood) setNeighborhood(result.neighborhood);
+  // Places outside Davidson County usually have a city and no neighborhood.
+  // "Franklin" is a real entry in the picker so it fills the field; "Nashville"
+  // is not, and would only become a junk custom value.
+  const hood = result.neighborhood || (isKnownNeighborhood(result.city) ? result.city : null);
+  if (hood) setNeighborhood(hood);
   if (result.price) setPrice(result.price);
   if (result.category) $('#f-category').value = result.category;
 
@@ -320,6 +324,11 @@ const runPlaceSearch = debounce(async () => {
 
 let lastResults = [];
 
+function resultSubtitle(result) {
+  const parts = [result.neighborhood, result.address, result.city];
+  return parts.filter(Boolean).filter((p, i, all) => all.indexOf(p) === i).join(' · ');
+}
+
 function renderPlaceResults(results) {
   lastResults = results;
   if (!results.length) return hideMenu('#place-results', '#f-name');
@@ -328,7 +337,7 @@ function renderPlaceResults(results) {
     .map((r, i) => `
       <li role="option" data-index="${i}">
         <span class="lookup-name">${escapeHtml(r.name)}</span>
-        <span class="lookup-sub">${escapeHtml([r.neighborhood, r.address].filter(Boolean).join(' · ') || r.city || '')}</span>
+        <span class="lookup-sub">${escapeHtml(resultSubtitle(r))}</span>
       </li>`)
     .join('');
   showMenu('#place-results', '#f-name');

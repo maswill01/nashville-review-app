@@ -71,13 +71,20 @@
 
       <div class="sheet-body">
         <input type="hidden" id="f-id" />
+        <input type="hidden" id="f-lat" />
+        <input type="hidden" id="f-lng" />
+        <input type="hidden" id="f-place-id" />
+        <input type="hidden" id="f-place-provider" />
 
-        <label class="field">
-          <span>Name</span>
-          <input id="f-name" type="text" required placeholder="e.g. Rolf and Daughters" />
-        </label>
-
+        <!-- Status comes first: it decides which fields below are shown at all. -->
         <div class="field-row">
+          <label class="field">
+            <span>Status</span>
+            <select id="f-status">
+              <option value="visited">Been there</option>
+              <option value="wishlist">Want to go</option>
+            </select>
+          </label>
           <label class="field">
             <span>Type</span>
             <select id="f-category">
@@ -90,27 +97,45 @@
               <option value="other">Other</option>
             </select>
           </label>
-          <label class="field">
-            <span>Status</span>
-            <select id="f-status">
-              <option value="visited">Been there</option>
-              <option value="wishlist">Want to go</option>
-            </select>
-          </label>
+        </div>
+
+        <div class="field">
+          <span class="field-label" id="f-name-label">Place</span>
+          <div class="lookup" id="place-lookup">
+            <input id="f-name" type="text" required autocomplete="off" autocorrect="off"
+                   spellcheck="false" role="combobox" aria-expanded="false"
+                   aria-controls="place-results" aria-autocomplete="list"
+                   placeholder="Search for a place…" />
+            <span class="lookup-spinner" id="place-spinner" hidden aria-hidden="true"></span>
+            <ul class="lookup-menu" id="place-results" role="listbox" hidden></ul>
+          </div>
+          <p class="hint" id="place-hint" hidden></p>
         </div>
 
         <label class="field">
-          <span>Neighborhood</span>
-          <input id="f-neighborhood" type="text" placeholder="Germantown, East Nash, The Gulch…" list="hoods" />
-          <datalist id="hoods">
-            <option>Downtown</option><option>The Gulch</option><option>Germantown</option>
-            <option>East Nashville</option><option>12 South</option><option>Midtown</option>
-            <option>Hillsboro Village</option><option>Wedgewood-Houston</option><option>Sylvan Park</option>
-            <option>Berry Hill</option><option>Green Hills</option><option>Donelson</option>
-          </datalist>
+          <span>Address</span>
+          <input id="f-address" type="text" autocomplete="off" placeholder="Filled in when you pick a place" />
         </label>
 
-        <div id="visited-only">
+        <div class="field">
+          <span class="field-label">Neighborhood</span>
+          <select id="f-neighborhood"></select>
+          <input id="f-neighborhood-custom" type="text" placeholder="Type the neighborhood" hidden />
+        </div>
+
+        <div class="field">
+          <span class="field-label">Price</span>
+          <div class="segmented" id="f-price">
+            <button type="button" data-value="1">$</button>
+            <button type="button" data-value="2">$$</button>
+            <button type="button" data-value="3">$$$</button>
+            <button type="button" data-value="4">$$$$</button>
+            <button type="button" data-value="">—</button>
+          </div>
+        </div>
+
+        <!-- Been there only: you cannot rate, date or re-visit a place you have not been to. -->
+        <div class="field-group" id="visited-only">
           <div class="field">
             <span class="field-label">Rating</span>
             <div class="stars" id="f-rating" role="radiogroup" aria-label="Rating">
@@ -123,27 +148,23 @@
             </div>
           </div>
 
-          <div class="field">
-            <span class="field-label">Price</span>
-            <div class="segmented" id="f-price">
-              <button type="button" data-value="1">$</button>
-              <button type="button" data-value="2">$$</button>
-              <button type="button" data-value="3">$$$</button>
-              <button type="button" data-value="4">$$$$</button>
-              <button type="button" data-value="">—</button>
-            </div>
-          </div>
+          <label class="field">
+            <span>Date visited</span>
+            <input id="f-visit-date" type="date" />
+          </label>
 
-          <div class="field-row">
-            <label class="field">
-              <span>Date visited</span>
-              <input id="f-visit-date" type="date" />
-            </label>
-            <label class="field checkbox">
-              <input id="f-would-return" type="checkbox" />
-              <span>Would go back</span>
-            </label>
-          </div>
+          <label class="switch-row">
+            <span>Would go back</span>
+            <input id="f-would-return" type="checkbox" />
+          </label>
+        </div>
+
+        <!-- Want to go only: where the recommendation came from. -->
+        <div class="field-group" id="wishlist-only">
+          <label class="field">
+            <span>Recommended by / source</span>
+            <input id="f-source" type="text" placeholder="Sarah, Nashville Scene, a TikTok…" />
+          </label>
         </div>
 
         <label class="field">
@@ -151,10 +172,17 @@
           <textarea id="f-notes" rows="4" placeholder="What you ordered, who you went with, what to get next time…"></textarea>
         </label>
 
-        <label class="field">
-          <span>Tags</span>
-          <input id="f-tags" type="text" placeholder="date night, patio, brunch" />
-        </label>
+        <div class="field">
+          <span class="field-label">Tags</span>
+          <div class="lookup tag-box" id="tag-box">
+            <div class="tag-chips" id="tag-chips"></div>
+            <input id="f-tag-entry" type="text" autocomplete="off" autocorrect="off"
+                   spellcheck="false" role="combobox" aria-expanded="false"
+                   aria-controls="tag-suggestions" aria-autocomplete="list"
+                   aria-label="Add a tag" placeholder="date night, patio…" />
+            <ul class="lookup-menu up" id="tag-suggestions" role="listbox" hidden></ul>
+          </div>
+        </div>
 
         <button type="button" class="danger-btn" id="delete-btn" hidden>Delete this place</button>
       </div>
@@ -163,6 +191,6 @@
 
   <div class="toast" id="toast" hidden></div>
 
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -1,4 +1,8 @@
+import { NEIGHBORHOOD_GROUPS, normalizeTags } from '/data/nashville.js';
+
 const $ = (sel) => document.querySelector(sel);
+
+const CUSTOM_HOOD = '__custom__';
 
 const state = {
   status: 'visited',
@@ -7,8 +11,15 @@ const state = {
   sort: 'recent',
   rating: null,
   price: null,
+  tags: [],
   editingId: null
 };
+
+// Filled from /api/meta on boot; until then the name field behaves as plain text.
+const meta = { placeSearch: false, provider: null };
+
+let places = [];
+let tagVocab = [];
 
 const CATEGORY_LABELS = {
   restaurant: 'Restaurant',
@@ -32,7 +43,12 @@ async function api(path, options = {}) {
     throw new Error('unauthorized');
   }
   const body = res.status === 204 ? null : await res.json().catch(() => null);
-  if (!res.ok) throw new Error(body?.error || 'Request failed');
+  if (!res.ok) {
+    const err = new Error(body?.error || 'Request failed');
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
   return body;
 }
 
@@ -58,6 +74,14 @@ function formatVisitDate(value) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Local calendar date. `toISOString()` would hand back yesterday for most of the
+// evening in Central time.
+function today() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function debounce(fn, ms) {
   let t;
   return (...args) => {
@@ -76,8 +100,9 @@ function cardHtml(place) {
   if (place.price) bits.push('$'.repeat(place.price));
   if (place.visit_date) bits.push(escapeHtml(formatVisitDate(place.visit_date)));
   if (place.would_return) bits.push('↩ would go back');
+  if (place.source) bits.push(`via ${escapeHtml(place.source)}`);
 
-  const meta = bits.join('<span class="dot">·</span>');
+  const meta_ = bits.join('<span class="dot">·</span>');
   const stars = place.rating ? '★'.repeat(place.rating) + '☆'.repeat(5 - place.rating) : '';
   const tags = (place.tags || '')
     .split(',')
@@ -92,13 +117,11 @@ function cardHtml(place) {
         <span class="card-name">${escapeHtml(place.name)}</span>
         ${stars ? `<span class="card-rating">${stars}</span>` : ''}
       </div>
-      <div class="card-meta">${meta}</div>
+      <div class="card-meta">${meta_}</div>
       ${place.notes ? `<p class="card-notes">${escapeHtml(place.notes)}</p>` : ''}
       ${tags ? `<div class="card-tags">${tags}</div>` : ''}
     </article>`;
 }
-
-let places = [];
 
 async function load() {
   const params = new URLSearchParams();
@@ -138,6 +161,191 @@ async function loadStats() {
   }
 }
 
+/* ------------------------------ neighborhood ------------------------------ */
+
+function buildNeighborhoodPicker() {
+  const select = $('#f-neighborhood');
+  const parts = ['<option value="">—</option>'];
+  for (const group of NEIGHBORHOOD_GROUPS) {
+    parts.push(`<optgroup label="${escapeHtml(group.label)}">`);
+    for (const name of group.items) {
+      parts.push(`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`);
+    }
+    parts.push('</optgroup>');
+  }
+  parts.push(`<option value="${CUSTOM_HOOD}">Somewhere else…</option>`);
+  select.innerHTML = parts.join('');
+}
+
+function setNeighborhood(value) {
+  const select = $('#f-neighborhood');
+  const custom = $('#f-neighborhood-custom');
+  const name = (value || '').trim();
+
+  const known = name && Array.from(select.options).some((o) => o.value === name);
+  if (known) {
+    select.value = name;
+    custom.value = '';
+    custom.hidden = true;
+  } else if (name) {
+    // A place saved before this list existed, or one you added yourself.
+    select.value = CUSTOM_HOOD;
+    custom.value = name;
+    custom.hidden = false;
+  } else {
+    select.value = '';
+    custom.value = '';
+    custom.hidden = true;
+  }
+}
+
+function readNeighborhood() {
+  const select = $('#f-neighborhood');
+  return select.value === CUSTOM_HOOD ? $('#f-neighborhood-custom').value.trim() : select.value;
+}
+
+/* ---------------------------------- tags ---------------------------------- */
+
+function renderTags() {
+  $('#tag-chips').innerHTML = state.tags
+    .map((tag, i) => `
+      <span class="tag-chip">${escapeHtml(tag)}<button type="button" class="tag-x"
+        data-index="${i}" aria-label="Remove ${escapeHtml(tag)}">×</button></span>`)
+    .join('');
+}
+
+function addTag(raw) {
+  const [tag] = normalizeTags(raw);
+  if (!tag || state.tags.includes(tag)) return false;
+  state.tags.push(tag);
+  renderTags();
+  return true;
+}
+
+function commitTagEntry() {
+  const input = $('#f-tag-entry');
+  // Paste of "date night, patio" should land as two chips, not one.
+  for (const tag of normalizeTags(input.value)) addTag(tag);
+  input.value = '';
+  hideMenu('#tag-suggestions', '#f-tag-entry');
+}
+
+function showTagSuggestions() {
+  const input = $('#f-tag-entry');
+  const typed = input.value.trim().toLowerCase();
+  const matches = tagVocab
+    .filter(({ tag }) => !state.tags.includes(tag) && (!typed || tag.includes(typed)))
+    .slice(0, 8);
+
+  if (!matches.length) return hideMenu('#tag-suggestions', '#f-tag-entry');
+
+  $('#tag-suggestions').innerHTML = matches
+    .map(({ tag, count }) => `
+      <li role="option" data-tag="${escapeHtml(tag)}">
+        <span>${escapeHtml(tag)}</span><span class="lookup-count">${count}</span>
+      </li>`)
+    .join('');
+  showMenu('#tag-suggestions', '#f-tag-entry');
+}
+
+async function loadTagVocab() {
+  try {
+    tagVocab = await api('/api/tags');
+  } catch {
+    tagVocab = [];
+  }
+}
+
+/* ------------------------------ place search ------------------------------ */
+
+let searchToken = 0;
+
+function clearPlaceLink() {
+  $('#f-lat').value = '';
+  $('#f-lng').value = '';
+  $('#f-place-id').value = '';
+  $('#f-place-provider').value = '';
+  updatePlaceHint();
+}
+
+function updatePlaceHint() {
+  const hint = $('#place-hint');
+  if ($('#f-lat').value) {
+    hint.textContent = '📍 Location saved';
+    hint.className = 'hint ok';
+    hint.hidden = false;
+  } else if (meta.placeSearch) {
+    hint.textContent = 'Pick a result to save the address and coordinates.';
+    hint.className = 'hint';
+    hint.hidden = false;
+  } else {
+    hint.hidden = true;
+  }
+}
+
+function choosePlace(result) {
+  $('#f-name').value = result.name;
+  $('#f-address').value = result.address || '';
+  $('#f-lat').value = result.lat ?? '';
+  $('#f-lng').value = result.lng ?? '';
+  $('#f-place-id').value = result.providerId || '';
+  $('#f-place-provider').value = result.provider || '';
+  if (result.neighborhood) setNeighborhood(result.neighborhood);
+  if (result.price) setPrice(result.price);
+  if (result.category) $('#f-category').value = result.category;
+
+  hideMenu('#place-results', '#f-name');
+  updatePlaceHint();
+  syncSaveState();
+}
+
+const runPlaceSearch = debounce(async () => {
+  const q = $('#f-name').value.trim();
+  if (!meta.placeSearch || q.length < 2) return hideMenu('#place-results', '#f-name');
+
+  const token = ++searchToken;
+  $('#place-spinner').hidden = false;
+  try {
+    const body = await api(`/api/place-search?q=${encodeURIComponent(q)}`);
+    if (token !== searchToken) return; // a newer keystroke already won
+    renderPlaceResults(body.results || []);
+  } catch (err) {
+    if (token !== searchToken) return;
+    hideMenu('#place-results', '#f-name');
+    toast(err.message);
+  } finally {
+    if (token === searchToken) $('#place-spinner').hidden = true;
+  }
+}, 300);
+
+let lastResults = [];
+
+function renderPlaceResults(results) {
+  lastResults = results;
+  if (!results.length) return hideMenu('#place-results', '#f-name');
+
+  $('#place-results').innerHTML = results
+    .map((r, i) => `
+      <li role="option" data-index="${i}">
+        <span class="lookup-name">${escapeHtml(r.name)}</span>
+        <span class="lookup-sub">${escapeHtml([r.neighborhood, r.address].filter(Boolean).join(' · ') || r.city || '')}</span>
+      </li>`)
+    .join('');
+  showMenu('#place-results', '#f-name');
+}
+
+/* ------------------------------- menu plumbing ---------------------------- */
+
+function showMenu(menuSel, inputSel) {
+  $(menuSel).hidden = false;
+  $(inputSel).setAttribute('aria-expanded', 'true');
+}
+
+function hideMenu(menuSel, inputSel) {
+  $(menuSel).hidden = true;
+  $(inputSel).setAttribute('aria-expanded', 'false');
+}
+
 /* --------------------------------- sheet ---------------------------------- */
 
 function setStars(value) {
@@ -157,7 +365,16 @@ function setPrice(value) {
 }
 
 function syncStatusFields() {
-  $('#visited-only').hidden = $('#f-status').value === 'wishlist';
+  const wishlist = $('#f-status').value === 'wishlist';
+  $('#visited-only').hidden = wishlist;
+  $('#wishlist-only').hidden = !wishlist;
+  // A place you have been to was almost always visited today, so fill it in
+  // rather than leaving an empty date control.
+  if (!wishlist && !$('#f-visit-date').value) $('#f-visit-date').value = today();
+}
+
+function syncSaveState() {
+  $('#save-btn').disabled = !$('#f-name').value.trim();
 }
 
 function openSheet(place = null) {
@@ -165,16 +382,29 @@ function openSheet(place = null) {
   $('#sheet-title').textContent = place ? 'Edit place' : 'New place';
   $('#f-id').value = place?.id ?? '';
   $('#f-name').value = place?.name ?? '';
+  $('#f-address').value = place?.address ?? '';
+  $('#f-lat').value = place?.lat ?? '';
+  $('#f-lng').value = place?.lng ?? '';
+  $('#f-place-id').value = place?.place_id ?? '';
+  $('#f-place-provider').value = place?.place_provider ?? '';
   $('#f-category').value = place?.category ?? 'restaurant';
   $('#f-status').value = place?.status ?? (state.status === 'wishlist' ? 'wishlist' : 'visited');
-  $('#f-neighborhood').value = place?.neighborhood ?? '';
+  setNeighborhood(place?.neighborhood ?? '');
   $('#f-visit-date').value = place?.visit_date ? place.visit_date.slice(0, 10) : '';
   $('#f-would-return').checked = Boolean(place?.would_return);
+  $('#f-source').value = place?.source ?? '';
   $('#f-notes').value = place?.notes ?? '';
-  $('#f-tags').value = place?.tags ?? '';
+  state.tags = normalizeTags(place?.tags ?? '');
+  $('#f-tag-entry').value = '';
+  renderTags();
   setStars(place?.rating ?? null);
   setPrice(place?.price ?? null);
   syncStatusFields();
+  updatePlaceHint();
+  syncSaveState();
+  hideMenu('#place-results', '#f-name');
+  hideMenu('#tag-suggestions', '#f-tag-entry');
+
   $('#delete-btn').hidden = !place;
   $('#sheet').hidden = false;
   document.body.style.overflow = 'hidden';
@@ -188,6 +418,8 @@ function closeSheet() {
 
 async function save(event) {
   event.preventDefault();
+  commitTagEntry();
+
   const name = $('#f-name').value.trim();
   if (!name) {
     toast('Give it a name first.');
@@ -199,13 +431,19 @@ async function save(event) {
     name,
     category: $('#f-category').value,
     status: $('#f-status').value,
-    neighborhood: $('#f-neighborhood').value,
+    neighborhood: readNeighborhood(),
+    address: $('#f-address').value,
     rating: state.rating,
     price: state.price,
     would_return: $('#f-would-return').checked,
     visit_date: $('#f-visit-date').value,
+    source: $('#f-source').value,
     notes: $('#f-notes').value,
-    tags: $('#f-tags').value
+    tags: state.tags.join(', '),
+    lat: $('#f-lat').value,
+    lng: $('#f-lng').value,
+    place_id: $('#f-place-id').value,
+    place_provider: $('#f-place-provider').value
   };
 
   const btn = $('#save-btn');
@@ -219,11 +457,18 @@ async function save(event) {
       toast('Added');
     }
     closeSheet();
-    await load();
+    await Promise.all([load(), loadTagVocab()]);
   } catch (err) {
+    // The same place picked twice: open the row that already exists instead of
+    // stranding the user on an error they cannot act on.
+    if (err.status === 409 && err.body?.place) {
+      toast('Already on your list — opening it.');
+      openSheet(err.body.place);
+      return;
+    }
     toast(err.message);
   } finally {
-    btn.disabled = false;
+    syncSaveState();
   }
 }
 
@@ -234,7 +479,7 @@ async function remove() {
     await api(`/api/places/${state.editingId}`, { method: 'DELETE' });
     closeSheet();
     toast('Deleted');
-    await load();
+    await Promise.all([load(), loadTagVocab()]);
   } catch (err) {
     toast(err.message);
   }
@@ -283,6 +528,88 @@ $('#delete-btn').addEventListener('click', remove);
 $('#place-form').addEventListener('submit', save);
 $('#f-status').addEventListener('change', syncStatusFields);
 
+$('#f-name').addEventListener('input', () => {
+  // Editing the name by hand breaks the tie to the picked result — the saved
+  // coordinates would no longer describe what is in the box.
+  if ($('#f-place-id').value || $('#f-lat').value) clearPlaceLink();
+  syncSaveState();
+  runPlaceSearch();
+});
+
+$('#f-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !$('#place-results').hidden) {
+    e.preventDefault();
+    hideMenu('#place-results', '#f-name');
+  }
+});
+
+$('#f-name').addEventListener('focus', () => {
+  if (lastResults.length && $('#f-name').value.trim().length >= 2) showMenu('#place-results', '#f-name');
+});
+
+// mousedown fires before blur, so the pick is not lost to the input losing focus.
+$('#place-results').addEventListener('mousedown', (e) => {
+  const li = e.target.closest('li[data-index]');
+  if (!li) return;
+  e.preventDefault();
+  choosePlace(lastResults[Number(li.dataset.index)]);
+});
+
+$('#f-name').addEventListener('blur', () => {
+  setTimeout(() => hideMenu('#place-results', '#f-name'), 120);
+});
+
+$('#f-neighborhood').addEventListener('change', () => {
+  const custom = $('#f-neighborhood-custom');
+  const isCustom = $('#f-neighborhood').value === CUSTOM_HOOD;
+  custom.hidden = !isCustom;
+  if (isCustom) custom.focus();
+  else custom.value = '';
+});
+
+$('#f-tag-entry').addEventListener('input', showTagSuggestions);
+$('#f-tag-entry').addEventListener('focus', showTagSuggestions);
+$('#f-tag-entry').addEventListener('blur', () => {
+  setTimeout(() => {
+    commitTagEntry();
+  }, 120);
+});
+
+$('#f-tag-entry').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    commitTagEntry();
+  } else if (e.key === 'Tab') {
+    commitTagEntry(); // commit, but let focus move on as usual
+  } else if (e.key === 'Backspace' && !$('#f-tag-entry').value) {
+    state.tags.pop();
+    renderTags();
+    showTagSuggestions();
+  } else if (e.key === 'Escape') {
+    hideMenu('#tag-suggestions', '#f-tag-entry');
+  }
+});
+
+$('#tag-suggestions').addEventListener('mousedown', (e) => {
+  const li = e.target.closest('li[data-tag]');
+  if (!li) return;
+  e.preventDefault();
+  addTag(li.dataset.tag);
+  $('#f-tag-entry').value = '';
+  showTagSuggestions();
+});
+
+$('#tag-chips').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tag-x');
+  if (!btn) return;
+  state.tags.splice(Number(btn.dataset.index), 1);
+  renderTags();
+});
+
+$('#tag-box').addEventListener('click', (e) => {
+  if (e.target === $('#tag-box') || e.target === $('#tag-chips')) $('#f-tag-entry').focus();
+});
+
 $('#f-rating').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
@@ -307,7 +634,26 @@ $('#logout-btn').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet();
+  if (e.key !== 'Escape' || $('#sheet').hidden) return;
+  if (!$('#place-results').hidden) return hideMenu('#place-results', '#f-name');
+  closeSheet();
 });
 
-load();
+/* --------------------------------- boot ----------------------------------- */
+
+async function boot() {
+  buildNeighborhoodPicker();
+  try {
+    Object.assign(meta, await api('/api/meta'));
+  } catch {
+    meta.placeSearch = false;
+  }
+  if (!meta.placeSearch) {
+    // No provider key configured: the field is still the name, just typed.
+    $('#f-name').placeholder = 'e.g. Rolf and Daughters';
+    $('#f-name-label').textContent = 'Name';
+  }
+  await Promise.all([load(), loadTagVocab()]);
+}
+
+boot();

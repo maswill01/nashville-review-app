@@ -6,13 +6,20 @@ targets, and installable to your home screen.
 
 Two lists in one:
 
-- **Been** — what you visited, rating, price, notes, whether you'd go back
+- **Been** — what you visited, rated 1-10, price, notes, whether you'd go back
 - **Want to go** — the running list of places you keep hearing about, and who told you
 
 The form follows the status: rating, date visited and "would go back" only appear
 once you've been somewhere; "recommended by / source" only appears on the wishlist.
 
 Plus search across names, addresses, notes and tags, filters by type, and sorting.
+
+Ratings run 1-10 rather than five stars, because in practice nobody logs a place
+below three and a five-point scale collapses to three usable levels. The anchors
+show under the control as you pick — 10 is "I'd take the president here", 5 is
+"fine, forgettable", 1 is "absolutely avoid" — so a 7 means the same thing in March
+as it did in January. Whether you'd actually return is the separate checkbox: a
+place can be an 8 and still not worth the drive.
 
 ### Keeping the data clean
 

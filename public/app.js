@@ -21,6 +21,23 @@ const meta = { placeSearch: false, provider: null };
 let places = [];
 let tagVocab = [];
 
+// Rating anchors. A ten-point scale is only worth having if 7 means the same
+// thing in March as it did in January, so the wording shows under the control.
+const RATING_MAX = 10;
+
+const RATING_LABELS = {
+  1: 'Absolutely avoid',
+  2: 'Genuinely bad',
+  3: 'Bad',
+  4: 'Below average',
+  5: 'Fine. Forgettable.',
+  6: 'Good, happy to be there',
+  7: 'Very good',
+  8: 'Excellent, seek it out',
+  9: 'Outstanding',
+  10: "I'd take the president here"
+};
+
 const CATEGORY_LABELS = {
   restaurant: 'Restaurant',
   bar: 'Bar',
@@ -103,7 +120,7 @@ function cardHtml(place) {
   if (place.source) bits.push(`via ${escapeHtml(place.source)}`);
 
   const meta_ = bits.join('<span class="dot">·</span>');
-  const stars = place.rating ? '★'.repeat(place.rating) + '☆'.repeat(5 - place.rating) : '';
+  const score = place.rating ? `${place.rating}/${RATING_MAX}` : '';
   const tags = (place.tags || '')
     .split(',')
     .map((t) => t.trim())
@@ -115,7 +132,7 @@ function cardHtml(place) {
     <article class="card" data-id="${place.id}">
       <div class="card-top">
         <span class="card-name">${escapeHtml(place.name)}</span>
-        ${stars ? `<span class="card-rating">${stars}</span>` : ''}
+        ${score ? `<span class="card-rating">${score}</span>` : ''}
       </div>
       <div class="card-meta">${meta_}</div>
       ${place.notes ? `<p class="card-notes">${escapeHtml(place.notes)}</p>` : ''}
@@ -154,7 +171,7 @@ async function loadStats() {
   try {
     const s = await api('/api/stats');
     const parts = [`${s.visited || 0} visited`, `${s.wishlist || 0} to try`];
-    if (s.avg_rating) parts.push(`avg ${s.avg_rating}★`);
+    if (s.avg_rating) parts.push(`avg ${s.avg_rating}/${RATING_MAX}`);
     $('#stat-line').textContent = parts.join(' · ');
   } catch {
     $('#stat-line').textContent = '';
@@ -357,12 +374,18 @@ function hideMenu(menuSel, inputSel) {
 
 /* --------------------------------- sheet ---------------------------------- */
 
-function setStars(value) {
+function setRating(value) {
   state.rating = value;
   document.querySelectorAll('#f-rating button[data-value]').forEach((btn) => {
-    const v = btn.dataset.value;
-    btn.classList.toggle('on', Boolean(v) && value !== null && Number(v) <= value);
+    const on = value !== null && Number(btn.dataset.value) === value;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-checked', String(on));
   });
+
+  const hint = $('#f-rating-hint');
+  hint.textContent = value === null ? '' : RATING_LABELS[value] || '';
+  hint.hidden = !hint.textContent;
+  $('#f-rating-clear').hidden = value === null;
 }
 
 function setPrice(value) {
@@ -406,7 +429,7 @@ function openSheet(place = null) {
   state.tags = normalizeTags(place?.tags ?? '');
   $('#f-tag-entry').value = '';
   renderTags();
-  setStars(place?.rating ?? null);
+  setRating(place?.rating ?? null);
   setPrice(place?.price ?? null);
   syncStatusFields();
   updatePlaceHint();
@@ -622,9 +645,12 @@ $('#tag-box').addEventListener('click', (e) => {
 $('#f-rating').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  const raw = btn.dataset.value;
-  setStars(raw === '' ? null : Number(raw));
+  // Tapping the current score again clears it, so a mis-tap is one tap to undo.
+  const value = Number(btn.dataset.value);
+  setRating(value === state.rating ? null : value);
 });
+
+$('#f-rating-clear').addEventListener('click', () => setRating(null));
 
 $('#f-price').addEventListener('click', (e) => {
   const btn = e.target.closest('button');

@@ -18,6 +18,10 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 60; // 60 days — stay logged in on your 
 const CATEGORIES = ['restaurant', 'bar', 'coffee', 'music', 'activity', 'shop', 'other'];
 const STATUSES = ['visited', 'wishlist'];
 
+// Ratings run 1-10. SMALLINT already held this, so widening the scale was a
+// validation change only — old 1-5 rows stay valid and simply read low.
+const RATING_MAX = 10;
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '256kb' }));
@@ -79,7 +83,7 @@ function clean(value, max = 500) {
 function toRating(value) {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > 5) return null;
+  if (!Number.isInteger(n) || n < 1 || n > RATING_MAX) return null;
   return n;
 }
 

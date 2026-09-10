@@ -14,7 +14,13 @@ say otherwise for a specific piece of work:
 3. **Open a pull request and merge it yourself**, squash, without waiting for a
    review. The pull request is not a review gate here; it exists so every change
    is one revertable commit on `main` with a "Revert" button in the GitHub UI.
-4. **Delete the branch after merging** and report what landed, with the commit SHA.
+4. **Report what landed**, with the commit SHA.
+
+Deleting the merged branch is the owner's setting to make, not a step here:
+GitHub **Settings → General → Automatically delete head branches** cleans them up
+on merge. Claude Code sandboxes generally cannot delete a remote branch — the git
+relay drops delete-pushes and the GitHub tools expose no branch-delete — so do not
+spend turns trying.
 
 Merging to `main` deploys to Railway. That is the owner's stated preference — they
 would rather see it live and ask for a rollback than review diffs up front.

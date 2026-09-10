@@ -137,15 +137,29 @@
         <!-- Been there only: you cannot rate, date or re-visit a place you have not been to. -->
         <div class="field-group" id="visited-only">
           <div class="field">
-            <span class="field-label">Rating</span>
-            <div class="stars" id="f-rating" role="radiogroup" aria-label="Rating">
-              <button type="button" data-value="1">★</button>
-              <button type="button" data-value="2">★</button>
-              <button type="button" data-value="3">★</button>
-              <button type="button" data-value="4">★</button>
-              <button type="button" data-value="5">★</button>
-              <button type="button" class="clear" data-value="">clear</button>
+            <div class="field-head">
+              <span class="field-label">Rating</span>
+              <button type="button" class="link-btn small" id="f-rating-clear" data-value="">Clear</button>
             </div>
+            <!-- Two rows of five: ten segments across a phone would give ~36px tap
+                 targets, and a mis-tap between 7 and 8 is exactly the one that matters. -->
+            <div class="scale" id="f-rating" role="radiogroup" aria-label="Rating">
+              <div class="segmented">
+                <button type="button" role="radio" aria-checked="false" data-value="1">1</button>
+                <button type="button" role="radio" aria-checked="false" data-value="2">2</button>
+                <button type="button" role="radio" aria-checked="false" data-value="3">3</button>
+                <button type="button" role="radio" aria-checked="false" data-value="4">4</button>
+                <button type="button" role="radio" aria-checked="false" data-value="5">5</button>
+              </div>
+              <div class="segmented">
+                <button type="button" role="radio" aria-checked="false" data-value="6">6</button>
+                <button type="button" role="radio" aria-checked="false" data-value="7">7</button>
+                <button type="button" role="radio" aria-checked="false" data-value="8">8</button>
+                <button type="button" role="radio" aria-checked="false" data-value="9">9</button>
+                <button type="button" role="radio" aria-checked="false" data-value="10">10</button>
+              </div>
+            </div>
+            <p class="hint" id="f-rating-hint" hidden></p>
           </div>
 
           <label class="field">

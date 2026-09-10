@@ -15,7 +15,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const COOKIE_NAME = 'nra_auth';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 60; // 60 days — stay logged in on your phone
 
-const CATEGORIES = ['restaurant', 'bar', 'coffee', 'music', 'activity', 'shop', 'other'];
+const CATEGORIES = ['restaurant', 'breakfast', 'bar', 'coffee', 'music', 'activity', 'shop', 'other'];
 const STATUSES = ['visited', 'wishlist'];
 
 // Ratings run 1-10. SMALLINT already held this, so widening the scale was a

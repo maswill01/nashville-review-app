@@ -31,10 +31,14 @@ const REQUEST_TIMEOUT_MS = 6000;
 // Provider taxonomies are huge; we only care about the seven buckets the app has.
 // First match wins, so order matters — 'bar' before 'restaurant', for instance.
 const CATEGORY_RULES = [
+  // Ahead of coffee and restaurant on purpose: a place tagged both "Café" and
+  // "Breakfast Spot" is somewhere you eat breakfast, and a diner is a breakfast
+  // place before it is a generic restaurant. Plain "Café" still lands on coffee.
+  [/breakfast|brunch|diner|pancake|waffle|bagel|creperie|crêpe|biscuit/i, 'breakfast'],
   [/coffee|cafe|café|tea|bakery|patisserie|donut|juice/i, 'coffee'],
   [/\bbar\b|brewery|brewpub|pub|taproom|cocktail|wine|distiller|speakeasy|nightclub|night_club/i, 'bar'],
   [/music|concert|venue|honky|theater|theatre|amphitheat|jazz|opera/i, 'music'],
-  [/restaurant|food|diner|steak|pizza|taco|sushi|barbecue|bbq|meal_takeaway|meal_delivery/i, 'restaurant'],
+  [/restaurant|food|steak|pizza|taco|sushi|barbecue|bbq|meal_takeaway|meal_delivery/i, 'restaurant'],
   [/park|museum|gallery|zoo|golf|gym|bowling|spa|hik|tour|attraction|stadium|aquarium|library/i, 'activity'],
   [/shop|store|market|boutique|retail|book|clothing/i, 'shop']
 ];

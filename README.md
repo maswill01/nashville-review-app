@@ -1,7 +1,7 @@
 # Nashville List
 
-A personal tracker for the restaurants, bars, coffee shops, music venues, and other
-places you hit around Nashville. Built to be used on a phone: one screen, big tap
+A personal tracker for the restaurants, breakfast spots, bars, coffee shops, music
+venues, and other places you hit around Nashville. Built to be used on a phone: one screen, big tap
 targets, and installable to your home screen.
 
 Two lists in one:

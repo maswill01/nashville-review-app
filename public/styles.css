@@ -72,7 +72,40 @@ button, input, select, textarea { font: inherit; color: inherit; }
   margin: 0;
   font-size: 22px;
   letter-spacing: -0.02em;
+  min-width: 0;
 }
+
+/* The title is the control that switches whose list you are reading. */
+.list-switch {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: 700;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.list-switch #list-owner {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-switch .caret { font-size: 12px; color: var(--muted); flex: none; }
+
+/* Reading someone else's list. The accent on the title is the whole signal that
+   what you are looking at is not yours, so it has to survive both palettes. */
+body.is-guest .list-switch { color: var(--accent); }
+body.is-guest .list-switch .caret { color: var(--accent); }
+
+/* Someone else's cards do not open anything, so they should not offer to. */
+body.is-guest .card { cursor: default; }
+body.is-guest .card:active { transform: none; }
 
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
 
@@ -320,6 +353,8 @@ main { padding: 12px 16px 0; max-width: 720px; margin: 0 auto; }
 
 .link-btn.strong { font-weight: 650; }
 
+.sheet-spacer { visibility: hidden; }
+
 .link-btn:disabled {
   color: var(--muted);
   opacity: 0.5;
@@ -556,6 +591,83 @@ main { padding: 12px 16px 0; max-width: 720px; margin: 0 auto; }
   z-index: 60;
   box-shadow: var(--shadow);
 }
+
+/* -------------------------------- people --------------------------------- */
+
+.people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.person {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.person.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.person-name { font-weight: 650; }
+
+.person-you {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.person.is-active .person-you { background: var(--surface); }
+
+.person-meta { font-size: 13px; color: var(--muted); }
+
+.person-loading { padding: 12px 2px; color: var(--muted); font-size: 14px; }
+
+.account-box { margin-top: 4px; }
+
+.account-box summary {
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.account-box form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 2px 0;
+}
+
+.account-box input {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  outline: none;
+}
+
+.account-box input:focus { border-color: var(--accent); }
+.account-box button { align-self: flex-start; }
+.account-box .hint { margin: 0; }
 
 /* -------------------------------- login ---------------------------------- */
 

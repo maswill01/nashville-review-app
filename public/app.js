@@ -12,11 +12,14 @@ const state = {
   rating: null,
   price: null,
   tags: [],
-  editingId: null
+  editingId: null,
+  // null means your own list. A username here means you are reading someone
+  // else's, which is read-only: the server ignores this on every write.
+  viewing: null
 };
 
 // Filled from /api/meta on boot; until then the name field behaves as plain text.
-const meta = { placeSearch: false, provider: null };
+const meta = { placeSearch: false, provider: null, user: null };
 
 let places = [];
 let tagVocab = [];
@@ -146,6 +149,7 @@ async function load() {
   if (state.status) params.set('status', state.status);
   if (state.category) params.set('category', state.category);
   if (state.q) params.set('q', state.q);
+  if (state.viewing) params.set('user', state.viewing);
   params.set('sort', state.sort);
 
   try {
@@ -159,9 +163,9 @@ async function load() {
   const empty = $('#empty');
   if (places.length === 0) {
     empty.hidden = false;
-    empty.textContent = state.q
-      ? 'Nothing matches that search.'
-      : 'Nothing here yet. Tap + to add your first spot.';
+    if (state.q) empty.textContent = 'Nothing matches that search.';
+    else if (state.viewing) empty.textContent = `${state.viewing} has not added anything here yet.`;
+    else empty.textContent = 'Nothing here yet. Tap + to add your first spot.';
   } else {
     empty.hidden = true;
   }
@@ -170,12 +174,88 @@ async function load() {
 
 async function loadStats() {
   try {
-    const s = await api('/api/stats');
+    const s = await api(`/api/stats${state.viewing ? `?user=${encodeURIComponent(state.viewing)}` : ''}`);
     const parts = [`${s.visited || 0} visited`, `${s.wishlist || 0} to try`];
     if (s.avg_rating) parts.push(`avg ${s.avg_rating}/${RATING_MAX}`);
     $('#stat-line').textContent = parts.join(' · ');
   } catch {
     $('#stat-line').textContent = '';
+  }
+}
+
+/* -------------------------------- whose list ------------------------------ */
+
+function syncViewing() {
+  const other = Boolean(state.viewing);
+  $('#list-owner').textContent = other ? `${state.viewing}'s list` : 'Nashville';
+  document.body.classList.toggle('is-guest', other);
+  // Nothing on this screen writes to someone else's list, so the control that
+  // would is gone rather than disabled — there is no version of it that works.
+  $('#add-btn').hidden = other;
+}
+
+function peopleRowHtml(person) {
+  const mine = meta.user && person.username === meta.user.username;
+  const bits = [`${person.visited} visited`, `${person.wishlist} to try`];
+  if (person.avg_rating) bits.push(`avg ${person.avg_rating}/${RATING_MAX}`);
+  const showing = mine ? !state.viewing : state.viewing === person.username;
+
+  return `
+    <li>
+      <button type="button" class="person${showing ? ' is-active' : ''}"
+              data-username="${escapeHtml(person.username)}" ${mine ? 'data-mine="1"' : ''}>
+        <span class="person-name">${escapeHtml(person.username)}${mine ? ' <span class="person-you">you</span>' : ''}</span>
+        <span class="person-meta">${escapeHtml(bits.join(' · '))}</span>
+      </button>
+    </li>`;
+}
+
+async function openPeople() {
+  $('#people-list').innerHTML = '<li class="person-loading">Loading…</li>';
+  $('#people-sheet').hidden = false;
+  $('#list-switch').setAttribute('aria-expanded', 'true');
+  document.body.style.overflow = 'hidden';
+  try {
+    const people = await api('/api/users');
+    $('#people-list').innerHTML = people.map(peopleRowHtml).join('');
+  } catch (err) {
+    $('#people-list').innerHTML = `<li class="person-loading">${escapeHtml(err.message)}</li>`;
+  }
+}
+
+function closePeople() {
+  $('#people-sheet').hidden = true;
+  $('#list-switch').setAttribute('aria-expanded', 'false');
+  document.body.style.overflow = '';
+  $('#password-form').reset();
+  $('#account-box').open = false;
+}
+
+function showList(username) {
+  state.viewing = username;
+  // Filters are about what you are looking for, not whose list it is, so they
+  // survive the switch — the server applies them to the new list just the same.
+  closePeople();
+  syncViewing();
+  load();
+}
+
+async function changePassword(event) {
+  event.preventDefault();
+  const btn = $('#pw-submit');
+  btn.disabled = true;
+  try {
+    await api('/api/password', {
+      method: 'POST',
+      body: JSON.stringify({ current: $('#pw-current').value, password: $('#pw-next').value })
+    });
+    $('#password-form').reset();
+    $('#account-box').open = false;
+    toast('Password changed');
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -549,10 +629,27 @@ $('#sort').addEventListener('change', (e) => {
 });
 
 $('#list').addEventListener('click', (e) => {
+  // Someone else's card already shows everything the form would, and the form
+  // only knows how to save. Opening it would be a lie about what happens next.
+  if (state.viewing) return;
   const card = e.target.closest('.card');
   if (!card) return;
   const place = places.find((p) => String(p.id) === card.dataset.id);
   if (place) openSheet(place);
+});
+
+$('#list-switch').addEventListener('click', openPeople);
+$('#people-close').addEventListener('click', closePeople);
+$('#password-form').addEventListener('submit', changePassword);
+
+$('#people-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.person');
+  if (!btn) return;
+  showList(btn.dataset.mine ? null : btn.dataset.username);
+});
+
+$('#people-sheet').addEventListener('click', (e) => {
+  if (e.target === $('#people-sheet')) closePeople();
 });
 
 $('#add-btn').addEventListener('click', () => openSheet());
@@ -670,7 +767,9 @@ $('#logout-btn').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || $('#sheet').hidden) return;
+  if (e.key !== 'Escape') return;
+  if (!$('#people-sheet').hidden) return closePeople();
+  if ($('#sheet').hidden) return;
   if (!$('#place-results').hidden) return hideMenu('#place-results', '#f-name');
   closeSheet();
 });
@@ -689,6 +788,7 @@ async function boot() {
     $('#f-name').placeholder = 'e.g. Rolf and Daughters';
     $('#f-name-label').textContent = 'Name';
   }
+  syncViewing();
   await Promise.all([load(), loadTagVocab()]);
 }
 

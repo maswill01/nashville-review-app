@@ -50,79 +50,17 @@ Two runtime dependencies (`express`, `pg`). That's deliberate — less to patch.
 
 ---
 
-## Deploying on Railway
+## Deployment
 
-### 1. Push this repo to GitHub
+Railway, straight from `main` — every merge redeploys. The service runs `npm start`,
+Railway health-checks `/api/health`, and the schema applies itself on boot from
+`SCHEMA` in `db.js`, so there is no migration step: a new column ships as part of a
+normal deploy.
 
-Already done if you're reading this on GitHub.
-
-### 2. Create the Railway project
-
-1. Go to [railway.com](https://railway.com) and sign in with GitHub.
-2. **New Project → Deploy from GitHub repo → `nashville-review-app`**.
-3. Railway detects Node, runs `npm install`, and starts it with `npm start`.
-
-The first deploy **will fail** — there's no database yet. That's expected.
-
-### 3. Add the database
-
-1. In the project canvas, click **+ New → Database → Add PostgreSQL**.
-2. Railway provisions Postgres with a persistent volume attached. Your data
-   survives redeploys and restarts; it is only lost if you delete that service.
-
-### 4. Set the environment variables
-
-Click your **app service** (not the Postgres one) → **Variables** → add these three:
-
-| Variable         | Value                                                            |
-| ---------------- | ---------------------------------------------------------------- |
-| `DATABASE_URL`   | `${{Postgres.DATABASE_URL}}`                                     |
-| `APP_PASSWORD`   | whatever password you want to type on your phone                 |
-| `SESSION_SECRET` | a long random string                                             |
-
-Optionally add a place-search key here too — see [Place search](#place-search).
-
-`${{Postgres.DATABASE_URL}}` is a Railway *reference variable* — type it exactly
-like that, braces included. Railway resolves it to the real connection string and
-keeps it correct if the database is ever recreated. Don't paste the raw URL.
-
-Generate a session secret:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-If `APP_PASSWORD` is missing, the app runs with **no login at all** and anyone with
-the URL can read and edit your data. If `SESSION_SECRET` is missing, the app works
-but logs you out on every redeploy.
-
-### 5. Give it a URL
-
-App service → **Settings → Networking → Generate Domain**. You get something like
-`nashville-review-app-production.up.railway.app`.
-
-### 6. Redeploy
-
-**Deployments → Redeploy** on the latest one. It should go green. The app creates
-its own table on first boot — no migration step to run. Schema changes ship the
-same way: the columns added for coordinates, place ids and "recommended by" use
-`ADD COLUMN IF NOT EXISTS`, so an existing database picks them up on the next boot
-without touching the rows already in it.
-
-Check `https://your-url/api/health` — it should return `{"ok":true,"db":"up","auth":true}`.
-
-### 7. Put it on your home screen
-
-- **iPhone**: open the URL in Safari (not Chrome) → Share → **Add to Home Screen**.
-- **Android**: open in Chrome → menu → **Install app** / **Add to Home screen**.
-
-It opens full-screen without browser chrome, and the login cookie lasts 60 days.
-
-### What this costs
-
-Railway's free trial credit runs out, and a Postgres running 24/7 needs a paid
-plan — the Hobby plan was $5/month when this was written. Check their current
-pricing; that number moves.
+The variables the app needs are documented in `.env.example` — what each one does
+and what breaks when it is missing. They live on the app service under
+**Variables**, where `DATABASE_URL` is the Railway reference `${{Postgres.DATABASE_URL}}`
+rather than a pasted connection string.
 
 ---
 
@@ -139,11 +77,6 @@ Set **one** of these variables on the app service:
 
 If both are set, Google wins. If neither is set the app still works — the field is
 a plain text box and you type the name, with no address or coordinates saved.
-
-Foursquare is the lower-friction start: create a project at
-`foursquare.com/developers` and use its Service Key. Google is worth it if you
-already have a Cloud project — enable **Places API (New)** and restrict the key to
-that one API.
 
 Apple MapKit JS is the obvious fourth option and is deliberately not implemented:
 it needs an Apple Developer membership plus ES256-signed JWTs minted from a `.p8`

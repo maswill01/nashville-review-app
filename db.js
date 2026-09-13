@@ -56,14 +56,36 @@ ALTER TABLE places ADD COLUMN IF NOT EXISTS place_provider TEXT;
 ALTER TABLE places ADD COLUMN IF NOT EXISTS place_id       TEXT;
 ALTER TABLE places ADD COLUMN IF NOT EXISTS source         TEXT;
 
+-- One account per person on the list. The username_key column is the lower-cased
+-- name and carries the uniqueness, so "Mason" and "mason" cannot both exist
+-- while the name still displays the way it was typed.
+CREATE TABLE IF NOT EXISTS users (
+  id            SERIAL PRIMARY KEY,
+  username      TEXT NOT NULL,
+  username_key  TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  token_version INTEGER NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Nullable so the column can land on a database full of rows that predate
+-- accounts; bootstrapOwner in server.js claims those on the next boot.
+ALTER TABLE places ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users (id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS places_status_idx   ON places (status);
 CREATE INDEX IF NOT EXISTS places_category_idx ON places (category);
 CREATE INDEX IF NOT EXISTS places_created_idx  ON places (created_at DESC);
+CREATE INDEX IF NOT EXISTS places_user_idx     ON places (user_id, created_at DESC);
 
--- One row per real-world place, so tapping the same search result twice cannot
--- create a duplicate. Rows typed by hand (no provider id) are exempt.
-CREATE UNIQUE INDEX IF NOT EXISTS places_provider_id_idx
-  ON places (place_provider, place_id)
+-- One row per real-world place *per person*, so tapping the same search result
+-- twice cannot create a duplicate. Rows typed by hand (no provider id) are exempt.
+--
+-- This index was global before accounts existed, which would have stopped a
+-- second person from ever saving a restaurant someone else already had — and,
+-- worse, handed them the other person's row to edit through the 409 path.
+DROP INDEX IF EXISTS places_provider_id_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS places_user_provider_id_idx
+  ON places (user_id, place_provider, place_id)
   WHERE place_id IS NOT NULL;
 `;
 

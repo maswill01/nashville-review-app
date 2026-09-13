@@ -1,7 +1,8 @@
 # Working rules for this repo
 
-A personal Nashville places tracker. One owner, one user, deployed on Railway
-straight from `main`.
+A Nashville places tracker shared by a small group of friends, deployed on Railway
+straight from `main`. One owner, several accounts: everyone keeps their own list and
+can read everyone else's.
 
 ## Workflow: branch, then merge yourself
 
@@ -70,9 +71,13 @@ Run the app against a scratch Postgres:
 ```bash
 npm install
 createdb nashville
-DATABASE_URL=postgresql://localhost/nashville APP_PASSWORD=test SESSION_SECRET=dev \
-  node server.js
+DATABASE_URL=postgresql://localhost/nashville INVITE_CODE=test SESSION_SECRET=dev \
+  OWNER_USERNAME=dev OWNER_PASSWORD=dev-password node server.js
 ```
+
+`OWNER_USERNAME`/`OWNER_PASSWORD` seed an account on a fresh database so there is
+something to log in as; without them the first thing to do is sign up through the
+form with the invite code.
 
 Then exercise what you changed — `curl` the API, or drive the UI with Playwright
 (Chromium is available in the Claude Code sandbox) and check the sheet at phone
@@ -90,8 +95,10 @@ in light mode.
   without asking; there is almost always a standard-library way.
 - **No build step.** `public/` is served as-is. Plain ES modules in the browser, no
   bundler, no transpiler, no framework. Keep it that way.
-- **Single shared password**, HMAC cookie, no user accounts. Appropriate for a list
-  of restaurants on a URL nobody knows. Do not put anything sensitive in here.
+- **Accounts, but barely.** Username and password per person, scrypt-hashed, signed
+  cookie, no session table. Signup needs the shared `INVITE_CODE`. Every account
+  holder can read every other account's places and notes — there is no private
+  entry, by decision. Do not put anything sensitive in here.
 - **Schema lives in `db.js`** and applies itself on boot. There is no migration
   tool; new columns go in as `ADD COLUMN IF NOT EXISTS` so an existing database
   picks them up on the next deploy.
@@ -103,7 +110,8 @@ anything you cannot read in this repo except `express` and `pg`.
 
 | File | What lives there |
 | ---- | ---------------- |
-| `server.js` | The whole backend, 415 lines: the HMAC cookie auth, the input coercion, every `/api` route, static serving. There is no router split on purpose — one file is still the right size. |
+| `server.js` | The whole backend: the routes, the input coercion, the per-account scoping, static serving. There is no router split on purpose — one file is still the right size. |
+| `auth.js` | scrypt password hashing and the signed session cookie. No database and no Express in it: it is the crypto, `server.js` does the SQL. Also the in-memory login throttle. |
 | `db.js` | The `pg` pool, two type parsers, and `SCHEMA` — the entire schema, applied on every boot. |
 | `place-search.js` | Server-side proxy to Google Places or Foursquare. Holds the provider key and maps their taxonomies onto this app's eight categories. |
 | `public/data/nashville.js` | Canonical neighborhoods, their aliases, `normalizeNeighborhood`, `normalizeTags`. **Imported by both the server and the browser.** |
@@ -117,6 +125,9 @@ turns it into `/api/places?status&category&q&sort`, the server turns that into a
 `WHERE`/`ORDER BY`, and the rows come back as JSON for `cardHtml`. **All filtering
 and sorting is server-side.** The browser never holds the full list, so a new
 filter needs a query parameter, not a client-side `.filter()`.
+
+That is also why viewing a friend's list costs almost nothing: it is one more query
+parameter on the same route, and every existing filter keeps working against it.
 
 `README.md` has the route table, the Railway deploy steps, and the place-search
 provider setup. Read it rather than re-deriving any of that.
@@ -135,7 +146,8 @@ One table, `places`, one row per place. Both statuses live in it.
 | `would_return`, `visit_date` | Visited only — the server nulls both on a wishlist row. |
 | `source` | Who recommended it. The form only shows it on the wishlist, but it is kept on both statuses so promoting a place to visited does not lose it. |
 | `neighborhood` | Passed through `normalizeNeighborhood`. Unrecognized values are kept exactly as typed — custom neighborhoods are allowed. |
-| `tags` | One comma-separated `TEXT` column, not a join table. `/api/tags` splits it with `STRING_TO_ARRAY` to build the autocomplete vocabulary. |
+| `tags` | One comma-separated `TEXT` column, not a join table. `/api/tags` splits it with `STRING_TO_ARRAY` to build the autocomplete vocabulary, scoped to one person. |
+| `user_id` | Who the row belongs to. Nullable in the schema only so the column could land on a database full of rows that predate accounts; `bootstrapOwner` claims those on the next boot. Set once at insert and never reassigned, which is why it is deliberately **not** in `PLACE_COLUMNS`. |
 | `lat`, `lng`, `place_provider`, `place_id` | Come from the search provider. Coordinates are stored as a pair or not at all. |
 
 ## Adding or changing a field
@@ -182,10 +194,18 @@ Each of these is load-bearing and none of them looks it:
   `/data/nashville.js`. One `process.env` or one `document.` breaks the other side.
   It is also the reason the server imports out of `public/` at all — one canonical
   list, no second copy to drift.
-- **Duplicate places are a handshake, not an error.** A partial unique index on
-  `(place_provider, place_id)` catches the same search result saved twice;
-  `POST /api/places` answers `409` *with the existing row attached*, and `app.js`
-  opens that row for editing. If you touch either side, keep both.
+- **Duplicate places are a handshake, not an error, and the handshake is per person.**
+  A partial unique index on `(user_id, place_provider, place_id)` catches the same
+  search result saved twice by the same person; `POST /api/places` answers `409`
+  *with the existing row attached*, and `app.js` opens that row for editing. If you
+  touch either side, keep both — and keep the `user_id` in both. The index was
+  global before accounts, which would have stopped a second person from ever saving
+  a restaurant someone else already had and handed them the other person's row to
+  edit.
+- **Every read needs a `user_id` in its `WHERE` clause.** `/api/places`, `/api/stats`
+  and `/api/tags` all scope to one account; `PUT` and `DELETE` scope to the caller's,
+  so someone else's row reads as `404` rather than `403`. A new route that forgets
+  this leaks quietly rather than erroring.
 - **Rule order in `place-search.js` decides categories.** First match wins —
   breakfast ahead of coffee, bar ahead of restaurant. A new pattern in the wrong
   position silently re-buckets places.

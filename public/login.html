@@ -14,27 +14,71 @@
   <div class="login-wrap">
     <form class="login-card" id="login-form">
       <h1>Nashville</h1>
-      <p>Your places, your notes.</p>
+      <p id="blurb">Your places, your notes.</p>
+
+      <input id="username" type="text" placeholder="Username" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false" required />
       <input id="password" type="password" placeholder="Password" autocomplete="current-password" required />
+      <input id="invite" type="text" placeholder="Invite code" autocomplete="off"
+             autocapitalize="none" autocorrect="off" spellcheck="false" hidden />
+
       <button type="submit" id="submit">Enter</button>
       <div class="login-error" id="error"></div>
+      <button type="button" class="login-switch" id="switch">No account? Sign up</button>
     </form>
   </div>
 
   <script>
     const form = document.getElementById('login-form');
     const errorEl = document.getElementById('error');
+    const invite = document.getElementById('invite');
+    const password = document.getElementById('password');
+    const submit = document.getElementById('submit');
+    const blurb = document.getElementById('blurb');
+    const switcher = document.getElementById('switch');
+
+    let mode = 'login';
+
+    // Whether an invite code is required is not a secret, and asking for one that
+    // is not needed would strand anyone setting this up for the first time.
+    let inviteRequired = true;
+    fetch('/api/health')
+      .then((res) => res.json())
+      .then((body) => {
+        inviteRequired = body.invite !== false;
+        if (mode === 'signup') render();
+      })
+      .catch(() => {});
+
+    function render() {
+      const signup = mode === 'signup';
+      blurb.textContent = signup ? 'Pick a name and a password.' : 'Your places, your notes.';
+      submit.textContent = signup ? 'Create account' : 'Enter';
+      switcher.textContent = signup ? 'Already have an account? Log in' : 'No account? Sign up';
+      password.autocomplete = signup ? 'new-password' : 'current-password';
+      invite.hidden = !(signup && inviteRequired);
+      invite.required = signup && inviteRequired;
+      errorEl.textContent = '';
+    }
+
+    switcher.addEventListener('click', () => {
+      mode = mode === 'signup' ? 'login' : 'signup';
+      render();
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errorEl.textContent = '';
-      const btn = document.getElementById('submit');
-      btn.disabled = true;
+      submit.disabled = true;
       try {
-        const res = await fetch('/api/login', {
+        const res = await fetch(mode === 'signup' ? '/api/signup' : '/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: document.getElementById('password').value })
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: password.value,
+            invite: invite.value
+          })
         });
         if (res.ok) {
           window.location.href = '/';
@@ -45,9 +89,11 @@
       } catch {
         errorEl.textContent = 'Network problem. Try again.';
       } finally {
-        btn.disabled = false;
+        submit.disabled = false;
       }
     });
+
+    render();
   </script>
 </body>
 </html>

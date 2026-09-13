@@ -1,19 +1,29 @@
 import express from 'express';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initDb, query, pool } from './db.js';
 import { normalizeNeighborhood, normalizeTags } from './public/data/nashville.js';
 import { searchPlaces, PROVIDER } from './place-search.js';
+import {
+  COOKIE_MAX_AGE, COOKIE_NAME, SESSION_SECRET_SET, burnPasswordTime, clearFailures,
+  hashPassword, readCookies, readSession, recordFailure, safeEqual, setAuthCookie,
+  signSession, throttled, verifyPassword
+} from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 3000;
-const APP_PASSWORD = process.env.APP_PASSWORD || '';
-const AUTH_ENABLED = APP_PASSWORD.length > 0;
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const COOKIE_NAME = 'nra_auth';
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 60; // 60 days — stay logged in on your phone
+
+// APP_PASSWORD used to be the login. It is the signup gate now — the code you text
+// a friend so they can make an account, never asked for again once they have one.
+// Reading the old name as a fallback means the Railway variable does not have to
+// change on the same deploy that ships accounts.
+const INVITE_CODE = process.env.INVITE_CODE || process.env.APP_PASSWORD || '';
+const INVITE_REQUIRED = INVITE_CODE.length > 0;
+
+// Existing rows predate accounts. Whoever this is gets them on the next boot.
+const OWNER_USERNAME = process.env.OWNER_USERNAME || '';
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || '';
 
 const CATEGORIES = ['restaurant', 'breakfast', 'bar', 'coffee', 'music', 'activity', 'shop', 'other'];
 const STATUSES = ['visited', 'wishlist'];
@@ -28,47 +38,28 @@ app.use(express.json({ limit: '256kb' }));
 
 /* ------------------------------ auth helpers ------------------------------ */
 
-function sessionToken() {
-  return crypto.createHmac('sha256', SESSION_SECRET).update('authenticated:v1').digest('hex');
+const publicUser = (user) => ({ id: user.id, username: user.username });
+
+// Enough to pick which page to serve. A valid signature means somebody logged in
+// on this device; whether that account still exists is the API's problem, and the
+// API answers it one query later rather than on every static page load.
+function hasSession(req) {
+  return readSession(readCookies(req)[COOKIE_NAME]) !== null;
 }
 
-function safeEqual(a, b) {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
+async function currentUser(req) {
+  const session = readSession(readCookies(req)[COOKIE_NAME]);
+  if (!session) return null;
 
-function readCookies(req) {
-  const header = req.headers.cookie || '';
-  const out = {};
-  for (const part of header.split(';')) {
-    const trimmed = part.trim();
-    if (!trimmed) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    out[trimmed.slice(0, eq)] = decodeURIComponent(trimmed.slice(eq + 1));
-  }
-  return out;
-}
-
-function isAuthed(req) {
-  if (!AUTH_ENABLED) return true;
-  const token = readCookies(req)[COOKIE_NAME];
-  return Boolean(token) && safeEqual(token, sessionToken());
-}
-
-function setAuthCookie(req, res, value, maxAge) {
-  const secure = req.headers['x-forwarded-proto'] === 'https' || req.secure;
-  const bits = [
-    `${COOKIE_NAME}=${value}`,
-    'HttpOnly',
-    'Path=/',
-    'SameSite=Lax',
-    `Max-Age=${maxAge}`
-  ];
-  if (secure) bits.push('Secure');
-  res.setHeader('Set-Cookie', bits.join('; '));
+  const { rows } = await query(
+    'SELECT id, username, token_version FROM users WHERE id = $1 LIMIT 1',
+    [session.id]
+  );
+  const user = rows[0];
+  // A bumped token_version is how a cookie on a lost phone gets cancelled: same
+  // user id, stale payload, no session.
+  if (!user || user.token_version !== session.tokenVersion) return null;
+  return user;
 }
 
 /* -------------------------------- validation ------------------------------ */
@@ -110,6 +101,25 @@ function toCoord(value, limit) {
   const n = Number(value);
   if (!Number.isFinite(n) || Math.abs(n) > limit) return null;
   return n;
+}
+
+// It shows up in other people's list picker, so a username is a name, not free
+// text. The lower-cased form is what the unique index actually holds.
+const USERNAME_RE = /^[a-zA-Z0-9._-]{2,30}$/;
+const PASSWORD_MIN = 8;
+
+function normalizeCredentials(body) {
+  const username = clean(body.username, 30);
+  if (!username || !USERNAME_RE.test(username)) {
+    return { error: 'Usernames are 2-30 characters: letters, numbers, dot, dash or underscore.' };
+  }
+  const password = String(body.password ?? '');
+  if (password.length < PASSWORD_MIN) {
+    return { error: `Pick a password of at least ${PASSWORD_MIN} characters.` };
+  }
+  // scrypt does not care about length, but there is no reason to hash a megabyte.
+  if (password.length > 200) return { error: 'That password is too long.' };
+  return { value: { username, password } };
 }
 
 function normalizePlace(body) {
@@ -165,20 +175,75 @@ const placeParams = (value) => PLACE_COLUMNS.map((column) => value[column]);
 app.get('/api/health', async (_req, res) => {
   try {
     await query('SELECT 1');
-    res.json({ ok: true, db: 'up', auth: AUTH_ENABLED });
+    res.json({ ok: true, db: 'up', invite: INVITE_REQUIRED });
   } catch (err) {
     res.status(503).json({ ok: false, db: 'down', error: err.message });
   }
 });
 
-app.post('/api/login', (req, res) => {
-  if (!AUTH_ENABLED) return res.json({ ok: true });
-  const password = String(req.body?.password ?? '');
-  if (!safeEqual(password, APP_PASSWORD)) {
-    return res.status(401).json({ error: 'Incorrect password.' });
+app.post('/api/login', async (req, res, next) => {
+  try {
+    const key = (clean(req.body?.username, 30) || '').toLowerCase();
+    const password = String(req.body?.password ?? '');
+
+    if (throttled(`login:${key}`)) {
+      return res.status(429).json({ error: 'Too many tries. Give it a few minutes.' });
+    }
+
+    const { rows } = await query(
+      'SELECT id, username, password_hash, token_version FROM users WHERE username_key = $1 LIMIT 1',
+      [key]
+    );
+    const user = rows[0];
+    // Spend the same time on a username that does not exist as on one that does,
+    // so the form cannot be used to find out who has an account here.
+    const ok = user ? await verifyPassword(password, user.password_hash) : await burnPasswordTime();
+
+    if (!user || !ok) {
+      recordFailure(`login:${key}`);
+      return res.status(401).json({ error: 'Wrong username or password.' });
+    }
+
+    clearFailures(`login:${key}`);
+    setAuthCookie(req, res, signSession(user), COOKIE_MAX_AGE);
+    res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    next(err);
   }
-  setAuthCookie(req, res, sessionToken(), COOKIE_MAX_AGE);
-  res.json({ ok: true });
+});
+
+app.post('/api/signup', async (req, res, next) => {
+  try {
+    // Keyed by address, not by username: guessing the invite code means trying
+    // many codes, and each try could name a different account.
+    const gate = `signup:${req.ip}`;
+    if (throttled(gate)) {
+      return res.status(429).json({ error: 'Too many tries. Give it a few minutes.' });
+    }
+    if (INVITE_REQUIRED && !safeEqual(String(req.body?.invite ?? ''), INVITE_CODE)) {
+      recordFailure(gate);
+      return res.status(403).json({ error: 'That invite code is not right.' });
+    }
+
+    const { value, error } = normalizeCredentials(req.body || {});
+    if (error) return res.status(400).json({ error });
+
+    const hash = await hashPassword(value.password);
+    const { rows } = await query(
+      `INSERT INTO users (username, username_key, password_hash)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (username_key) DO NOTHING
+       RETURNING id, username, token_version`,
+      [value.username, value.username.toLowerCase(), hash]
+    );
+    if (!rows.length) return res.status(409).json({ error: 'That username is taken.' });
+
+    clearFailures(gate);
+    setAuthCookie(req, res, signSession(rows[0]), COOKIE_MAX_AGE);
+    res.status(201).json({ ok: true, user: publicUser(rows[0]) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.post('/api/logout', (req, res) => {
@@ -186,16 +251,24 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-// Everything below /api requires a session.
-app.use('/api', (req, res, next) => {
-  if (isAuthed(req)) return next();
-  res.status(401).json({ error: 'unauthorized' });
+// Everything below /api requires a session, and knows whose it is.
+app.use('/api', async (req, res, next) => {
+  try {
+    const user = await currentUser(req);
+    if (!user) return res.status(401).json({ error: 'unauthorized' });
+    req.user = user;
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.get('/api/places', async (req, res, next) => {
   try {
-    const where = [];
-    const params = [];
+    // Every read is scoped to one person's list. Nothing reaches the browser
+    // without a user_id in the WHERE clause.
+    const where = ['user_id = $1'];
+    const params = [req.user.id];
 
     if (STATUSES.includes(req.query.status)) {
       params.push(req.query.status);
@@ -231,7 +304,7 @@ app.get('/api/places', async (req, res, next) => {
   }
 });
 
-app.get('/api/stats', async (_req, res, next) => {
+app.get('/api/stats', async (req, res, next) => {
   try {
     const { rows } = await query(`
       SELECT
@@ -239,7 +312,8 @@ app.get('/api/stats', async (_req, res, next) => {
         COUNT(*) FILTER (WHERE status = 'wishlist') AS wishlist,
         ROUND(AVG(rating) FILTER (WHERE status = 'visited'), 1) AS avg_rating
       FROM places
-    `);
+      WHERE user_id = $1
+    `, [req.user.id]);
     res.json(rows[0]);
   } catch (err) {
     next(err);
@@ -247,26 +321,26 @@ app.get('/api/stats', async (_req, res, next) => {
 });
 
 // Everything the form needs to build its pickers in one round trip.
-app.get('/api/meta', (_req, res) => {
-  res.json({ placeSearch: Boolean(PROVIDER), provider: PROVIDER });
+app.get('/api/meta', (req, res) => {
+  res.json({ placeSearch: Boolean(PROVIDER), provider: PROVIDER, user: publicUser(req.user) });
 });
 
 // Tags already in use, most-used first, so the tag input can autocomplete instead
 // of letting a second spelling of the same tag into the data.
-app.get('/api/tags', async (_req, res, next) => {
+app.get('/api/tags', async (req, res, next) => {
   try {
     const { rows } = await query(`
       SELECT tag, COUNT(*)::int AS count
       FROM (
         SELECT TRIM(LOWER(UNNEST(STRING_TO_ARRAY(tags, ',')))) AS tag
         FROM places
-        WHERE tags IS NOT NULL AND tags <> ''
+        WHERE user_id = $1 AND tags IS NOT NULL AND tags <> ''
       ) t
       WHERE tag <> ''
       GROUP BY tag
       ORDER BY count DESC, tag ASC
       LIMIT 200
-    `);
+    `, [req.user.id]);
     res.json(rows);
   } catch (err) {
     next(err);
@@ -313,19 +387,21 @@ app.post('/api/places', async (req, res, next) => {
     // so the client can open it for editing instead of making a second copy.
     if (value.place_id) {
       const dupe = await query(
-        'SELECT * FROM places WHERE place_provider = $1 AND place_id = $2 LIMIT 1',
-        [value.place_provider, value.place_id]
+        'SELECT * FROM places WHERE user_id = $1 AND place_provider = $2 AND place_id = $3 LIMIT 1',
+        [req.user.id, value.place_provider, value.place_id]
       );
       if (dupe.rows.length) {
         return res.status(409).json({ error: 'That place is already on your list.', place: dupe.rows[0] });
       }
     }
 
-    const columns = PLACE_COLUMNS.join(', ');
-    const placeholders = PLACE_COLUMNS.map((_, i) => `$${i + 1}`).join(',');
+    // user_id is deliberately outside PLACE_COLUMNS: that array also drives the
+    // UPDATE, and ownership is set once at insert and never reassigned.
+    const columns = [...PLACE_COLUMNS, 'user_id'];
+    const placeholders = columns.map((_, i) => `$${i + 1}`).join(',');
     const { rows } = await query(
-      `INSERT INTO places (${columns}) VALUES (${placeholders}) RETURNING *`,
-      placeParams(value)
+      `INSERT INTO places (${columns.join(', ')}) VALUES (${placeholders}) RETURNING *`,
+      [...placeParams(value), req.user.id]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -341,12 +417,14 @@ app.put('/api/places/:id', async (req, res, next) => {
     const { value, error } = normalizePlace(req.body || {});
     if (error) return res.status(400).json({ error });
 
+    // Somebody else's row is "not found" rather than "forbidden": the reply says
+    // nothing about whether that id exists on another list.
     const assignments = PLACE_COLUMNS.map((column, i) => `${column} = $${i + 1}`).join(', ');
     const { rows } = await query(
       `UPDATE places SET ${assignments}, updated_at = NOW()
-       WHERE id = $${PLACE_COLUMNS.length + 1}
+       WHERE id = $${PLACE_COLUMNS.length + 1} AND user_id = $${PLACE_COLUMNS.length + 2}
        RETURNING *`,
-      [...placeParams(value), id]
+      [...placeParams(value), id, req.user.id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found.' });
     res.json(rows[0]);
@@ -359,7 +437,7 @@ app.delete('/api/places/:id', async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Bad id.' });
-    const { rowCount } = await query('DELETE FROM places WHERE id = $1', [id]);
+    const { rowCount } = await query('DELETE FROM places WHERE id = $1 AND user_id = $2', [id, req.user.id]);
     if (!rowCount) return res.status(404).json({ error: 'Not found.' });
     res.json({ ok: true });
   } catch (err) {
@@ -370,7 +448,7 @@ app.delete('/api/places/:id', async (req, res, next) => {
 /* --------------------------------- pages ---------------------------------- */
 
 app.get('/', (req, res) => {
-  const file = isAuthed(req) ? 'index.html' : 'login.html';
+  const file = hasSession(req) ? 'index.html' : 'login.html';
   res.sendFile(path.join(__dirname, 'public', file));
 });
 
@@ -393,14 +471,63 @@ app.use((err, _req, res, _next) => {
 if (!PROVIDER) {
   console.warn('[warn] No place-search key set (GOOGLE_PLACES_API_KEY or FOURSQUARE_API_KEY) — names are typed by hand, with no address or coordinates.');
 }
-if (!AUTH_ENABLED) {
-  console.warn('[warn] APP_PASSWORD is not set — anyone with the URL can read and edit your data.');
+if (!INVITE_REQUIRED) {
+  console.warn('[warn] No INVITE_CODE set — anyone who finds the URL can create an account and read every list.');
 }
-if (AUTH_ENABLED && !process.env.SESSION_SECRET) {
-  console.warn('[warn] SESSION_SECRET is not set — a random one is generated, so you are logged out on every restart.');
+if (!SESSION_SECRET_SET) {
+  console.warn('[warn] SESSION_SECRET is not set — a random one is generated, so everyone is logged out on every restart.');
+}
+
+// Rows added before accounts existed have no owner. Hand them to OWNER_USERNAME,
+// creating that account if it is not there yet, so the owner's list is never
+// briefly empty after the deploy that turns scoping on. Idempotent: once the rows
+// are claimed the UPDATE matches nothing, and an existing password is never
+// overwritten, so the env var can stay set or be removed afterwards.
+async function bootstrapOwner() {
+  const { rows: counted } = await query('SELECT COUNT(*)::int AS n FROM places WHERE user_id IS NULL');
+  const unowned = counted[0].n;
+
+  if (!OWNER_USERNAME) {
+    // Silence here would mean a deploy where the list simply looks empty, which is
+    // the single most alarming way this change could go wrong.
+    if (unowned) {
+      console.warn(`[warn] ${unowned} place(s) predate accounts and belong to nobody, so nobody can see them. Set OWNER_USERNAME (with OWNER_PASSWORD if that account does not exist yet) to claim them.`);
+    }
+    return;
+  }
+
+  const username = clean(OWNER_USERNAME, 30);
+  if (!username || !USERNAME_RE.test(username)) {
+    console.warn(`[warn] OWNER_USERNAME "${OWNER_USERNAME}" is not a valid username — skipping.`);
+    return;
+  }
+
+  const key = username.toLowerCase();
+  let { rows } = await query('SELECT id FROM users WHERE username_key = $1 LIMIT 1', [key]);
+
+  if (!rows.length) {
+    if (OWNER_PASSWORD.length < PASSWORD_MIN) {
+      console.warn(`[warn] OWNER_USERNAME is set but OWNER_PASSWORD is missing or under ${PASSWORD_MIN} characters, so the account was not created and ${unowned} place(s) that predate accounts are still owned by nobody.`);
+      return;
+    }
+    const hash = await hashPassword(OWNER_PASSWORD);
+    ({ rows } = await query(
+      `INSERT INTO users (username, username_key, password_hash)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (username_key) DO NOTHING
+       RETURNING id`,
+      [username, key, hash]
+    ));
+    if (rows.length) console.log(`[db] created the owner account "${username}"`);
+    else ({ rows } = await query('SELECT id FROM users WHERE username_key = $1 LIMIT 1', [key]));
+  }
+
+  const { rowCount } = await query('UPDATE places SET user_id = $1 WHERE user_id IS NULL', [rows[0].id]);
+  if (rowCount) console.log(`[db] gave ${rowCount} place(s) that predate accounts to "${username}"`);
 }
 
 initDb()
+  .then(bootstrapOwner)
   .then(() => {
     app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
   })

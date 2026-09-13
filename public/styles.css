@@ -605,3 +605,15 @@ main { padding: 12px 16px 0; max-width: 720px; margin: 0 auto; }
 }
 
 .login-error { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+/* Outranks the `.login-card button` rule above, which is the primary action. */
+.login-card .login-switch {
+  margin-top: 2px;
+  padding: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.login-card .login-switch:hover { color: var(--accent); }

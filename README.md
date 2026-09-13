@@ -1,8 +1,11 @@
 # Nashville List
 
-A personal tracker for the restaurants, breakfast spots, bars, coffee shops, music
-venues, and other places you hit around Nashville. Built to be used on a phone: one screen, big tap
-targets, and installable to your home screen.
+A tracker for the restaurants, breakfast spots, bars, coffee shops, music venues,
+and other places you hit around Nashville. Built to be used on a phone: one screen,
+big tap targets, and installable to your home screen.
+
+Everyone has their own account and their own list. Signing up takes an invite code,
+so it stays the group of people you actually gave it to.
 
 Two lists in one:
 
@@ -28,8 +31,9 @@ Anything you might later filter on is picked, not typed freely:
 - **Place name** comes from a place-search provider (see below). One tap fills in
   the name, address, coordinates, and usually the neighborhood, price and type.
   Coordinates are what make a map or a "near me" view possible later, and the
-  provider's place id means the same restaurant cannot be added twice — tapping a
-  place you already have opens the existing entry instead.
+  provider's place id means the same restaurant cannot land on your list twice —
+  tapping a place you already have opens the existing entry instead. Two people can
+  each have their own entry for the same restaurant, with their own ratings.
 - **Neighborhood** is a picker with ~90 Nashville neighborhoods, grouped by area,
   plus "Somewhere else…" for anything missing. Common shorthand is folded onto the
   canonical name on save, so "east nash", "East Side" and "East Nashville" all end
@@ -44,7 +48,7 @@ Anything you might later filter on is picked, not typed freely:
 | Backend  | Node + Express                    | Railway builds it with zero config                      |
 | Database | PostgreSQL                        | Persistent, managed by Railway                          |
 | Frontend | Plain HTML/CSS/JS served by Express | No build step to break, nothing to keep upgrading      |
-| Auth     | One shared password               | It's a single-user app on a public URL                  |
+| Auth     | Username + password per account   | A small group of friends, each with their own list      |
 
 Two runtime dependencies (`express`, `pg`). That's deliberate — less to patch.
 
@@ -102,7 +106,7 @@ Requires Node 20+ (for `--env-file`) and a local Postgres.
 
 ```bash
 npm install
-cp .env.example .env     # then edit DATABASE_URL and APP_PASSWORD
+cp .env.example .env     # then edit DATABASE_URL and INVITE_CODE
 createdb nashville
 node --env-file=.env server.js
 ```
@@ -124,12 +128,14 @@ Worth doing every few months once you have real notes in there.
 
 ## API
 
-All endpoints require the login cookie except `/api/health` and `/api/login`.
+All endpoints require the login cookie except `/api/health`, `/api/login` and
+`/api/signup`. Everything under `/api` is scoped to the account in that cookie.
 
 | Method   | Path               | Notes                                            |
 | -------- | ------------------ | ------------------------------------------------ |
 | `GET`    | `/api/health`      | Liveness + DB check (Railway's healthcheck)      |
-| `POST`   | `/api/login`       | `{ "password": "..." }`                          |
+| `POST`   | `/api/login`       | `{ "username": "...", "password": "..." }`       |
+| `POST`   | `/api/signup`      | Adds `{ "invite": "..." }` — the invite code     |
 | `POST`   | `/api/logout`      |                                                  |
 | `GET`    | `/api/meta`        | Whether place search is configured               |
 | `GET`    | `/api/places`      | Filters: `status`, `category`, `q`, `sort`       |
@@ -140,11 +146,29 @@ All endpoints require the login cookie except `/api/health` and `/api/login`.
 | `DELETE` | `/api/places/:id`  | Delete                                           |
 | `GET`    | `/api/stats`       | Counts and average rating                        |
 
+## Accounts
+
+Everyone on the list has their own username and password, and their own places.
+Signing up needs the `INVITE_CODE`, so the gate is a code you text a friend rather
+than an open form on a public URL. Nothing else is gated: once someone has an
+account they can read every other account's list.
+
+Passwords are hashed with `scrypt` from Node's standard library — no native module,
+no third dependency. The session is still a signed cookie with no session table
+behind it, now carrying the user id and a `token_version`. Bumping a row's
+`token_version` invalidates every cookie that account holds, which is how you sign
+out a lost phone without logging everyone else out; changing `SESSION_SECRET` is
+still the blunt instrument that logs out everybody.
+
+Wrong passwords are rate limited to ten per username per fifteen minutes, in memory,
+and a username that does not exist costs the same wall-clock time as one that does,
+so the form cannot be used to find out who has an account.
+
 ## A note on the security model
 
-One shared password, checked in constant time, backed by an HMAC-signed HTTP-only
-cookie. That is appropriate for a personal list of restaurants on a URL nobody else
-knows. It is not appropriate for anything sensitive: there are no user accounts, no
-rate limiting on login attempts, and no encryption of the notes at rest beyond what
-Railway provides. If this ever holds something you'd actually mind leaking, that
-model needs to change.
+This is a shared list among people who know each other. Every account holder can
+read every other account's places, notes included — there is no private entry and no
+per-field hiding. Notes are not encrypted at rest beyond what Railway provides, and
+the invite code is shared rather than per-person, so anyone who has it can pass it
+on. That is the right shape for restaurant notes among friends and the wrong shape
+for anything you would mind a friend-of-a-friend reading.

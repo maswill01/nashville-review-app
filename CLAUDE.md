@@ -96,6 +96,69 @@ in light mode.
   tool; new columns go in as `ADD COLUMN IF NOT EXISTS` so an existing database
   picks them up on the next deploy.
 
+## The code in one pass
+
+Eight source files. Nothing is generated, nothing is bundled, and no file imports
+anything you cannot read in this repo except `express` and `pg`.
+
+| File | What lives there |
+| ---- | ---------------- |
+| `server.js` | The whole backend, 415 lines: the HMAC cookie auth, the input coercion, every `/api` route, static serving. There is no router split on purpose — one file is still the right size. |
+| `db.js` | The `pg` pool, two type parsers, and `SCHEMA` — the entire schema, applied on every boot. |
+| `place-search.js` | Server-side proxy to Google Places or Foursquare. Holds the provider key and maps their taxonomies onto this app's eight categories. |
+| `public/data/nashville.js` | Canonical neighborhoods, their aliases, `normalizeNeighborhood`, `normalizeTags`. **Imported by both the server and the browser.** |
+| `public/app.js` | The entire frontend, 695 lines: filter state, list rendering, the add/edit sheet, place search, tag entry. No framework, no state library. |
+| `public/login.html` | The password page. Posts to `/api/login` and redirects; it shares nothing with `app.js`. |
+| `public/index.html` | App shell and the whole form. Every control has an `id` that `app.js` reads by hand. |
+| `public/styles.css` | One stylesheet: light palette, then a full `prefers-color-scheme: dark` block that redefines it. |
+
+One request path covers most of the app: `app.js` holds a `state` object, `load()`
+turns it into `/api/places?status&category&q&sort`, the server turns that into a
+`WHERE`/`ORDER BY`, and the rows come back as JSON for `cardHtml`. **All filtering
+and sorting is server-side.** The browser never holds the full list, so a new
+filter needs a query parameter, not a client-side `.filter()`.
+
+`README.md` has the route table, the Railway deploy steps, and the place-search
+provider setup. Read it rather than re-deriving any of that.
+
+### The data model
+
+One table, `places`, one row per place. Both statuses live in it.
+
+| Column | Worth knowing |
+| ------ | ------------- |
+| `name` | The only required field. Everything else is nullable. |
+| `category` | `restaurant`, `breakfast`, `bar`, `coffee`, `music`, `activity`, `shop`, `other`. Anything unrecognized falls back to `other` rather than erroring. |
+| `status` | `visited` or `wishlist`. Decides which half of the form shows and which columns the server keeps. |
+| `rating` | 1–10. Widened from 1–5 in `39a323c`; old rows were left alone, so pre-widening entries read low. Forced null on wishlist rows. |
+| `price` | 1–4. |
+| `would_return`, `visit_date` | Visited only — the server nulls both on a wishlist row. |
+| `source` | Who recommended it. The form only shows it on the wishlist, but it is kept on both statuses so promoting a place to visited does not lose it. |
+| `neighborhood` | Passed through `normalizeNeighborhood`. Unrecognized values are kept exactly as typed — custom neighborhoods are allowed. |
+| `tags` | One comma-separated `TEXT` column, not a join table. `/api/tags` splits it with `STRING_TO_ARRAY` to build the autocomplete vocabulary. |
+| `lat`, `lng`, `place_provider`, `place_id` | Come from the search provider. Coordinates are stored as a pair or not at all. |
+
+## Adding or changing a field
+
+A field is five files, and skipping any one of them fails quietly rather than
+loudly:
+
+1. **`db.js`** — add it to `SCHEMA` as its own
+   `ALTER TABLE places ADD COLUMN IF NOT EXISTS`. Do not edit the `CREATE TABLE`
+   block; a database that already exists never runs it again.
+2. **`server.js`** — add it to `PLACE_COLUMNS` (that array drives the `INSERT`
+   columns, the `UPDATE` assignments, and the parameter order) and give it a
+   coercion in `normalizePlace`. A column missing from `PLACE_COLUMNS` is simply
+   never written, with no error.
+3. **`public/index.html`** — the control, with an `id`.
+4. **`public/app.js`** — read it in `openSheet` *and* write it into the payload in
+   `save`. Do only the second and editing an existing place silently blanks it.
+5. **`public/styles.css`** — if it needs styling, check the dark block too.
+
+If the field is something you would ever filter on, it also needs a branch in the
+`/api/places` `WHERE` clause and a picker rather than a text box — see *Data
+hygiene* below.
+
 ## Data hygiene
 
 The whole point of the current form design: anything you might later filter on is
@@ -104,3 +167,29 @@ picked, not typed. Neighborhoods come from the canonical list in
 from tags already used, and place names come from a search provider so entries carry
 coordinates and a stable place id. If you add a new filterable field, give it a
 picker, not a text box.
+
+## Things that will bite you
+
+Each of these is load-bearing and none of them looks it:
+
+- **The two type parsers in `db.js`.** `DATE` (oid 1082) is parsed as a raw
+  `'YYYY-MM-DD'` string, because node-pg's default `Date` object is local midnight
+  and shifts a visit date by a day once serialized to UTC JSON. `NUMERIC` (1700) is
+  parsed to a `Number`, because the default ships coordinates to the browser as
+  `"36.160000"`. Deleting either line reintroduces a bug that was already fixed.
+- **`public/data/nashville.js` must stay free of Node and DOM references.** The
+  server imports it off disk; the browser loads the same file over HTTP as
+  `/data/nashville.js`. One `process.env` or one `document.` breaks the other side.
+  It is also the reason the server imports out of `public/` at all — one canonical
+  list, no second copy to drift.
+- **Duplicate places are a handshake, not an error.** A partial unique index on
+  `(place_provider, place_id)` catches the same search result saved twice;
+  `POST /api/places` answers `409` *with the existing row attached*, and `app.js`
+  opens that row for editing. If you touch either side, keep both.
+- **Rule order in `place-search.js` decides categories.** First match wins —
+  breakfast ahead of coffee, bar ahead of restaurant. A new pattern in the wrong
+  position silently re-buckets places.
+- **`SESSION_SECRET` is the login.** The cookie is
+  `HMAC(SESSION_SECRET, 'authenticated:v1')` — there is no session store. Changing
+  the secret logs out every device, and that is also the only way to revoke a
+  session.

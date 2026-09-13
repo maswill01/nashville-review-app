@@ -137,14 +137,36 @@ All endpoints require the login cookie except `/api/health`, `/api/login` and
 | `POST`   | `/api/login`       | `{ "username": "...", "password": "..." }`       |
 | `POST`   | `/api/signup`      | Adds `{ "invite": "..." }` — the invite code     |
 | `POST`   | `/api/logout`      |                                                  |
-| `GET`    | `/api/meta`        | Whether place search is configured               |
-| `GET`    | `/api/places`      | Filters: `status`, `category`, `q`, `sort`       |
-| `GET`    | `/api/tags`        | Tags in use with counts, for autocomplete        |
+| `POST`   | `/api/password`    | `{ "current": "...", "password": "..." }`        |
+| `GET`    | `/api/meta`        | Place search config, and who you are             |
+| `GET`    | `/api/users`       | Everyone's username and list counts              |
+| `GET`    | `/api/places`      | Filters: `status`, `category`, `q`, `sort`, `user` |
+| `GET`    | `/api/tags`        | Your tags in use with counts, for autocomplete   |
 | `GET`    | `/api/place-search`| Proxied provider lookup: `q`                     |
 | `POST`   | `/api/places`      | Create — `409` if that place id is already saved |
 | `PUT`    | `/api/places/:id`  | Update                                           |
 | `DELETE` | `/api/places/:id`  | Delete                                           |
-| `GET`    | `/api/stats`       | Counts and average rating                        |
+| `GET`    | `/api/stats`       | Counts and average rating; takes `user`          |
+
+## Reading each other's lists
+
+The title in the top bar is a button: tap it and you get everyone with an account,
+with their counts and average rating, and picking one swaps the whole screen to
+their list. It turns accent-coloured and the **+** button disappears, because
+there is nothing on that screen that writes to somebody else's list.
+
+Every filter keeps working while you are over there — the tabs, the type chips, the
+search box and the sort all apply to their places instead of yours. That falls out
+of the design rather than costing anything: all filtering was already server-side,
+so another list is one more query parameter (`?user=`) on the same route.
+
+Reading is all it does. Writes ignore that parameter entirely and always use the
+account in your cookie, so someone else's row answers `404` to an edit or a delete
+rather than relying on a permission check somebody has to remember to write.
+
+Tag autocomplete is the deliberate exception: it stays yours even while you are
+reading a friend's list, because it feeds the add form and their vocabulary in
+there is exactly how a second spelling of the same tag gets in.
 
 ## Accounts
 
@@ -163,6 +185,10 @@ still the blunt instrument that logs out everybody.
 Wrong passwords are rate limited to ten per username per fifteen minutes, in memory,
 and a username that does not exist costs the same wall-clock time as one that does,
 so the form cannot be used to find out who has an account.
+
+You can change your own password from the Lists sheet. It signs out your other
+devices and leaves the one you changed it on logged in, which is the useful
+behaviour when you are changing it because you think it leaked.
 
 ## A note on the security model
 

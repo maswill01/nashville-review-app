@@ -15,7 +15,12 @@
 <body>
   <header class="topbar">
     <div class="topbar-row">
-      <h1>Nashville</h1>
+      <h1>
+        <button type="button" class="list-switch" id="list-switch"
+                aria-haspopup="dialog" aria-expanded="false">
+          <span id="list-owner">Nashville</span><span class="caret" aria-hidden="true">▾</span>
+        </button>
+      </h1>
       <div class="topbar-actions">
         <span class="stat" id="stat-line">—</span>
         <button class="icon-btn" id="logout-btn" title="Log out" aria-label="Log out">⏻</button>
@@ -203,6 +208,34 @@
         <button type="button" class="danger-btn" id="delete-btn" hidden>Delete this place</button>
       </div>
     </form>
+  </div>
+
+  <div class="sheet-backdrop" id="people-sheet" hidden>
+    <div class="sheet" role="dialog" aria-label="Lists">
+      <div class="sheet-head">
+        <!-- Balances "Done" so the title sits centred, the way the place sheet's
+             Cancel/Save pair does. -->
+        <span class="link-btn sheet-spacer" aria-hidden="true">Done</span>
+        <strong>Lists</strong>
+        <button type="button" class="link-btn strong" id="people-close">Done</button>
+      </div>
+
+      <div class="sheet-body">
+        <ul class="people" id="people-list"></ul>
+
+        <details class="account-box" id="account-box">
+          <summary>Change my password</summary>
+          <form id="password-form">
+            <input id="pw-current" type="password" autocomplete="current-password"
+                   placeholder="Current password" required />
+            <input id="pw-next" type="password" autocomplete="new-password"
+                   placeholder="New password" required />
+            <button type="submit" class="link-btn strong" id="pw-submit">Change it</button>
+            <p class="hint">This signs out your other devices, but not this one.</p>
+          </form>
+        </details>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast" hidden></div>

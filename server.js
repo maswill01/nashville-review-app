@@ -114,12 +114,18 @@ function normalizeCredentials(body) {
     return { error: 'Usernames are 2-30 characters: letters, numbers, dot, dash or underscore.' };
   }
   const password = String(body.password ?? '');
+  const problem = passwordProblem(password);
+  if (problem) return { error: problem };
+  return { value: { username, password } };
+}
+
+function passwordProblem(password) {
   if (password.length < PASSWORD_MIN) {
-    return { error: `Pick a password of at least ${PASSWORD_MIN} characters.` };
+    return `Pick a password of at least ${PASSWORD_MIN} characters.`;
   }
   // scrypt does not care about length, but there is no reason to hash a megabyte.
-  if (password.length > 200) return { error: 'That password is too long.' };
-  return { value: { username, password } };
+  if (password.length > 200) return 'That password is too long.';
+  return null;
 }
 
 function normalizePlace(body) {
@@ -263,12 +269,83 @@ app.use('/api', async (req, res, next) => {
   }
 });
 
+// Whose list this request is looking at: yours unless ?user= names someone else.
+// Nothing here grants write access — every write ignores the parameter and uses
+// req.user.id — so another account's list is read-only by construction rather than
+// by a permission check somebody has to remember.
+async function viewedUserId(req) {
+  const username = clean(req.query.user, 30);
+  if (!username || username.toLowerCase() === req.user.username.toLowerCase()) {
+    return req.user.id;
+  }
+  const { rows } = await query(
+    'SELECT id FROM users WHERE username_key = $1 LIMIT 1',
+    [username.toLowerCase()]
+  );
+  return rows.length ? rows[0].id : null;
+}
+
+// Everyone with an account, so the list switcher has somebody to switch to.
+app.get('/api/users', async (_req, res, next) => {
+  try {
+    const { rows } = await query(`
+      SELECT
+        u.username,
+        (COUNT(p.id) FILTER (WHERE p.status = 'visited'))::int  AS visited,
+        (COUNT(p.id) FILTER (WHERE p.status = 'wishlist'))::int AS wishlist,
+        ROUND(AVG(p.rating) FILTER (WHERE p.status = 'visited'), 1) AS avg_rating
+      FROM users u
+      LEFT JOIN places p ON p.user_id = u.id
+      GROUP BY u.id, u.username
+      ORDER BY LOWER(u.username) ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/password', async (req, res, next) => {
+  try {
+    const next_ = String(req.body?.password ?? '');
+    const problem = passwordProblem(next_);
+    if (problem) return res.status(400).json({ error: problem });
+
+    const { rows } = await query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+    if (!rows.length || !(await verifyPassword(String(req.body?.current ?? ''), rows[0].password_hash))) {
+      // 403, not the 401 this would otherwise deserve: the caller's session is
+      // fine, it is the typed password that is wrong, and `api()` in app.js bounces
+      // every 401 straight to the login page. Answering 401 here would throw the
+      // user out of the app for a typo.
+      return res.status(403).json({ error: 'That is not your current password.' });
+    }
+
+    // Bumping token_version is the point of changing a password you think leaked:
+    // it cancels every cookie this account holds. Re-signing here keeps the device
+    // doing the changing logged in, and signs the others out.
+    const hash = await hashPassword(next_);
+    const { rows: updated } = await query(
+      `UPDATE users SET password_hash = $1, token_version = token_version + 1
+       WHERE id = $2
+       RETURNING id, username, token_version`,
+      [hash, req.user.id]
+    );
+    setAuthCookie(req, res, signSession(updated[0]), COOKIE_MAX_AGE);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get('/api/places', async (req, res, next) => {
   try {
     // Every read is scoped to one person's list. Nothing reaches the browser
     // without a user_id in the WHERE clause.
+    const viewing = await viewedUserId(req);
+    if (viewing === null) return res.status(404).json({ error: 'No such list.' });
+
     const where = ['user_id = $1'];
-    const params = [req.user.id];
+    const params = [viewing];
 
     if (STATUSES.includes(req.query.status)) {
       params.push(req.query.status);
@@ -306,6 +383,9 @@ app.get('/api/places', async (req, res, next) => {
 
 app.get('/api/stats', async (req, res, next) => {
   try {
+    const viewing = await viewedUserId(req);
+    if (viewing === null) return res.status(404).json({ error: 'No such list.' });
+
     const { rows } = await query(`
       SELECT
         COUNT(*) FILTER (WHERE status = 'visited')  AS visited,
@@ -313,7 +393,7 @@ app.get('/api/stats', async (req, res, next) => {
         ROUND(AVG(rating) FILTER (WHERE status = 'visited'), 1) AS avg_rating
       FROM places
       WHERE user_id = $1
-    `, [req.user.id]);
+    `, [viewing]);
     res.json(rows[0]);
   } catch (err) {
     next(err);
@@ -326,7 +406,9 @@ app.get('/api/meta', (req, res) => {
 });
 
 // Tags already in use, most-used first, so the tag input can autocomplete instead
-// of letting a second spelling of the same tag into the data.
+// of letting a second spelling of the same tag into the data. Deliberately always
+// yours and never ?user=: this feeds the add form, which only exists on your own
+// list, and a friend's vocabulary in there would be how a second spelling gets in.
 app.get('/api/tags', async (req, res, next) => {
   try {
     const { rows } = await query(`

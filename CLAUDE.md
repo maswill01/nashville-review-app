@@ -115,7 +115,7 @@ anything you cannot read in this repo except `express` and `pg`.
 | `db.js` | The `pg` pool, two type parsers, and `SCHEMA` — the entire schema, applied on every boot. |
 | `place-search.js` | Server-side proxy to Google Places or Foursquare. Holds the provider key and maps their taxonomies onto this app's eight categories. |
 | `public/data/nashville.js` | Canonical neighborhoods, their aliases, `normalizeNeighborhood`, `normalizeTags`. **Imported by both the server and the browser.** |
-| `public/app.js` | The entire frontend, 695 lines: filter state, list rendering, the add/edit sheet, place search, tag entry. No framework, no state library. |
+| `public/app.js` | The entire frontend: filter state, whose list you are reading, list rendering, the add/edit sheet, place search, tag entry. No framework, no state library. |
 | `public/login.html` | The password page. Posts to `/api/login` and redirects; it shares nothing with `app.js`. |
 | `public/index.html` | App shell and the whole form. Every control has an `id` that `app.js` reads by hand. |
 | `public/styles.css` | One stylesheet: light palette, then a full `prefers-color-scheme: dark` block that redefines it. |
@@ -126,8 +126,11 @@ turns it into `/api/places?status&category&q&sort`, the server turns that into a
 and sorting is server-side.** The browser never holds the full list, so a new
 filter needs a query parameter, not a client-side `.filter()`.
 
-That is also why viewing a friend's list costs almost nothing: it is one more query
-parameter on the same route, and every existing filter keeps working against it.
+That is also why viewing a friend's list costs almost nothing: `state.viewing` adds
+`?user=` to the same route, and every existing filter keeps working against it.
+`viewedUserId` in `server.js` turns that into the `user_id` the `WHERE` clause uses.
+Writes never consult it — they use `req.user.id` — so read-only is a property of the
+shape rather than a check that can be forgotten on a new route.
 
 `README.md` has the route table, the Railway deploy steps, and the place-search
 provider setup. Read it rather than re-deriving any of that.

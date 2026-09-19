@@ -455,16 +455,21 @@ function hideMenu(menuSel, inputSel) {
 
 /* --------------------------------- sheet ---------------------------------- */
 
-function setRating(value) {
+// `fromInput` means the exact-rating box is what changed, so leave it alone —
+// rewriting its value mid-keystroke would move the caret out from under them.
+function setRating(value, fromInput = false) {
   state.rating = value;
   document.querySelectorAll('#f-rating button[data-value]').forEach((btn) => {
     const on = value !== null && Number(btn.dataset.value) === value;
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-checked', String(on));
   });
+  if (!fromInput) $('#f-rating-exact').value = value === null ? '' : String(value);
 
   const hint = $('#f-rating-hint');
-  hint.textContent = value === null ? '' : RATING_LABELS[value] || '';
+  // A half point sits between two anchors; the lower one is the honest read of
+  // 8.5 — at least this good, and reaching for the next.
+  hint.textContent = value === null ? '' : RATING_LABELS[Math.floor(value)] || '';
   hint.hidden = !hint.textContent;
   $('#f-rating-clear').hidden = value === null;
 }
@@ -749,6 +754,25 @@ $('#f-rating').addEventListener('click', (e) => {
 });
 
 $('#f-rating-clear').addEventListener('click', () => setRating(null));
+
+// Typed live rather than on blur, so tapping Save straight after typing 8.5
+// saves 8.5 and not the score that was there before.
+$('#f-rating-exact').addEventListener('input', (e) => {
+  const raw = e.target.value.trim();
+  if (raw === '') {
+    setRating(null, true);
+    return;
+  }
+  const n = Number(raw);
+  // Half-typed or out of range: keep the last good score and let the blur below
+  // put the box back in step with it.
+  if (!Number.isFinite(n) || n < 1 || n > RATING_MAX) return;
+  setRating(Math.round(n * 10) / 10, true);
+});
+
+// Blur or Enter: redraw the box from state, which rounds 8.53 to 8.5 and undoes
+// anything that never became a score.
+$('#f-rating-exact').addEventListener('change', () => setRating(state.rating));
 
 $('#f-price').addEventListener('click', (e) => {
   const btn = e.target.closest('button');

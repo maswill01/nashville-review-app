@@ -146,7 +146,14 @@
           <div class="field">
             <div class="field-head">
               <span class="field-label">Rating</span>
-              <button type="button" class="link-btn small" id="f-rating-clear" data-value="">Clear</button>
+              <div class="field-head-actions">
+                <!-- The buttons are for the common case; this is for the score
+                     that falls between two of them. -->
+                <input id="f-rating-exact" class="rating-exact" type="number"
+                       inputmode="decimal" min="1" max="10" step="0.1"
+                       placeholder="8.5" aria-label="Exact rating" />
+                <button type="button" class="link-btn small" id="f-rating-clear" data-value="">Clear</button>
+              </div>
             </div>
             <!-- Two rows of five: ten segments across a phone would give ~36px tap
                  targets, and a mis-tap between 7 and 8 is exactly the one that matters. -->

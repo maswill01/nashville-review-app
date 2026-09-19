@@ -144,7 +144,7 @@ One table, `places`, one row per place. Both statuses live in it.
 | `name` | The only required field. Everything else is nullable. |
 | `category` | `restaurant`, `breakfast`, `bar`, `coffee`, `music`, `activity`, `shop`, `other`. Anything unrecognized falls back to `other` rather than erroring. |
 | `status` | `visited` or `wishlist`. Decides which half of the form shows and which columns the server keeps. |
-| `rating` | 1–10. Widened from 1–5 in `39a323c`; old rows were left alone, so pre-widening entries read low. Forced null on wishlist rows. |
+| `rating` | 1–10 to one decimal place, so 8.5 is a score. `NUMERIC(3, 1)`; the buttons cover the whole numbers and the box beside them takes anything in between. Widened from 1–5 in `39a323c`; old rows were left alone, so pre-widening entries read low. Forced null on wishlist rows. |
 | `price` | 1–4. |
 | `would_return`, `visit_date` | Visited only — the server nulls both on a wishlist row. |
 | `source` | Who recommended it. The form only shows it on the wishlist, but it is kept on both statuses so promoting a place to visited does not lose it. |

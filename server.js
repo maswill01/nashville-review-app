@@ -71,11 +71,14 @@ function clean(value, max = 500) {
   return str.slice(0, max);
 }
 
+// One decimal place, so 8.5 is a score and 8.53 is that score typed sloppily.
+// The column is NUMERIC(3, 1) and would round anyway; doing it here means the
+// value the browser gets back is the value it sent.
 function toRating(value) {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > RATING_MAX) return null;
-  return n;
+  if (!Number.isFinite(n) || n < 1 || n > RATING_MAX) return null;
+  return Math.round(n * 10) / 10;
 }
 
 function toPrice(value) {

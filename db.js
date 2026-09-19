@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS places (
   neighborhood  TEXT,
   address       TEXT,
   status        TEXT NOT NULL DEFAULT 'visited',
-  rating        SMALLINT,
+  rating        NUMERIC(3, 1),
   price         SMALLINT,
   would_return  BOOLEAN,
   visit_date    DATE,
@@ -55,6 +55,22 @@ ALTER TABLE places ADD COLUMN IF NOT EXISTS lng            NUMERIC(9, 6);
 ALTER TABLE places ADD COLUMN IF NOT EXISTS place_provider TEXT;
 ALTER TABLE places ADD COLUMN IF NOT EXISTS place_id       TEXT;
 ALTER TABLE places ADD COLUMN IF NOT EXISTS source         TEXT;
+
+-- Ratings are half points now, so the column has to hold 8.5. SMALLINT -> NUMERIC
+-- is lossless in both directions for whole scores, but ALTER COLUMN TYPE has no
+-- IF NOT EXISTS and rewrites the table every time it runs, so it is guarded.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'places'
+      AND column_name = 'rating'
+      AND data_type <> 'numeric'
+  ) THEN
+    ALTER TABLE places ALTER COLUMN rating TYPE NUMERIC(3, 1);
+  END IF;
+END $$;
 
 -- One account per person on the list. The username_key column is the lower-cased
 -- name and carries the uniqueness, so "Mason" and "mason" cannot both exist

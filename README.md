@@ -21,8 +21,10 @@ Ratings run 1-10 rather than five stars, because in practice nobody logs a place
 below three and a five-point scale collapses to three usable levels. The anchors
 show under the control as you pick — 10 is "I'd take the president here", 5 is
 "fine, forgettable", 1 is "absolutely avoid" — so a 7 means the same thing in March
-as it did in January. Whether you'd actually return is the separate checkbox: a
-place can be an 8 and still not worth the drive.
+as it did in January. Ten buttons cover the whole numbers; the box next to them
+takes half points for the place that is better than an 8 and short of a 9.
+Whether you'd actually return is the separate checkbox: a place can be an 8 and
+still not worth the drive.
 
 ### Keeping the data clean
 

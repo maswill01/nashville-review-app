@@ -179,6 +179,33 @@ const PLACE_COLUMNS = [
 
 const placeParams = (value) => PLACE_COLUMNS.map((column) => value[column]);
 
+// Shared by the UPDATE in PUT and by the wishlist -> visited promotion below, so
+// the two cannot drift out of step with PLACE_COLUMNS independently.
+const PLACE_ASSIGNMENTS = PLACE_COLUMNS.map((column, i) => `${column} = $${i + 1}`).join(', ');
+
+// Going to a place you had saved to "want to go" is not a duplicate, it is the
+// same row changing lists. The incoming values win wherever the form actually had
+// something, and the wishlist row keeps the rest — `source` above all, which the
+// visited half of the form never shows, so "who told me about this" would
+// otherwise be dropped by the very save that records the visit.
+function promoteFromWishlist(existing, value) {
+  const merged = {};
+  for (const column of PLACE_COLUMNS) {
+    merged[column] = value[column] ?? existing[column];
+  }
+  // Tags are a set, not a field: keep the ones added when the place went on the
+  // list as well as the ones typed on the way back from it.
+  merged.tags = normalizeTags(`${existing.tags || ''},${value.tags || ''}`).join(', ') || null;
+
+  // A note written before going ("get the double, cash only") is not superseded by
+  // the write-up afterwards, and this move is silent — nothing would show that the
+  // older note had been overwritten. Keep both and let it be edited down.
+  if (value.notes && existing.notes && value.notes !== existing.notes) {
+    merged.notes = `${value.notes}\n\nFrom Want to go: ${existing.notes}`.slice(0, 4000);
+  }
+  return merged;
+}
+
 /* ---------------------------------- routes -------------------------------- */
 
 app.get('/api/health', async (_req, res) => {
@@ -468,15 +495,35 @@ app.post('/api/places', async (req, res, next) => {
     const { value, error } = normalizePlace(req.body || {});
     if (error) return res.status(400).json({ error });
 
-    // Same place tapped twice out of search: hand back the row that already exists
-    // so the client can open it for editing instead of making a second copy.
     if (value.place_id) {
       const dupe = await query(
         'SELECT * FROM places WHERE user_id = $1 AND place_provider = $2 AND place_id = $3 LIMIT 1',
         [req.user.id, value.place_provider, value.place_id]
       );
-      if (dupe.rows.length) {
-        return res.status(409).json({ error: 'That place is already on your list.', place: dupe.rows[0] });
+      const existing = dupe.rows[0];
+
+      // The common way this happens is the happy path, not a mistake: you saved a
+      // place to "want to go", you went, and now you are writing it up. Move the
+      // row across rather than refusing the save — the details just typed are the
+      // whole point of it. 200 rather than 201 says the row moved instead of
+      // being created; `moved_from` is what the client words the toast from.
+      if (existing && existing.status === 'wishlist' && value.status === 'visited') {
+        const { rows } = await query(
+          `UPDATE places SET ${PLACE_ASSIGNMENTS}, updated_at = NOW()
+           WHERE id = $${PLACE_COLUMNS.length + 1} AND user_id = $${PLACE_COLUMNS.length + 2}
+           RETURNING *`,
+          [...placeParams(promoteFromWishlist(existing, value)), existing.id, req.user.id]
+        );
+        return res.json({ ...rows[0], moved_from: 'wishlist' });
+      }
+
+      // Every other collision is ambiguous enough to hand back instead: re-rating
+      // a place you already logged, or putting one you have been to onto the
+      // wishlist, would overwrite or null a rating nobody asked to lose. The row
+      // rides along so the client can point the open sheet at it rather than
+      // stranding the entry on an error.
+      if (existing) {
+        return res.status(409).json({ error: 'That place is already on your list.', place: existing });
       }
     }
 
@@ -504,9 +551,8 @@ app.put('/api/places/:id', async (req, res, next) => {
 
     // Somebody else's row is "not found" rather than "forbidden": the reply says
     // nothing about whether that id exists on another list.
-    const assignments = PLACE_COLUMNS.map((column, i) => `${column} = $${i + 1}`).join(', ');
     const { rows } = await query(
-      `UPDATE places SET ${assignments}, updated_at = NOW()
+      `UPDATE places SET ${PLACE_ASSIGNMENTS}, updated_at = NOW()
        WHERE id = $${PLACE_COLUMNS.length + 1} AND user_id = $${PLACE_COLUMNS.length + 2}
        RETURNING *`,
       [...placeParams(value), id, req.user.id]

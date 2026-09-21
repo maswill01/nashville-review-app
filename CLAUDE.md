@@ -199,12 +199,27 @@ Each of these is load-bearing and none of them looks it:
   list, no second copy to drift.
 - **Duplicate places are a handshake, not an error, and the handshake is per person.**
   A partial unique index on `(user_id, place_provider, place_id)` catches the same
-  search result saved twice by the same person; `POST /api/places` answers `409`
-  *with the existing row attached*, and `app.js` opens that row for editing. If you
-  touch either side, keep both — and keep the `user_id` in both. The index was
-  global before accounts, which would have stopped a second person from ever saving
-  a restaurant someone else already had and handed them the other person's row to
-  edit.
+  search result saved twice by the same person. `POST /api/places` splits on which
+  way the clash goes:
+  - **Already on your wishlist, saved as visited** — the expected way to use the
+    app, not a mistake. The server merges and moves the row (`200`, plus
+    `moved_from: 'wishlist'` for the toast). `promoteFromWishlist` lets the
+    incoming values win wherever the form had something and keeps the wishlist
+    row's otherwise, because the visited half of the form does not show `source`
+    and would silently drop it. Tags union and notes keep both halves: the move
+    happens without a prompt, so it must not destroy anything.
+  - **Any other clash** — `409` *with the existing row attached*, because
+    re-rating a place or wishlisting one you have been to would overwrite or null
+    a rating nobody asked to lose. `adoptExistingPlace` in `app.js` points the
+    open sheet at that row while keeping what was typed, so a second Save updates
+    rather than duplicating. It deliberately does not call `openSheet(place)` —
+    that repaints every control from the row and throws the entry away, which is
+    the bug the split fixed.
+
+  If you touch either side, keep both — and keep the `user_id` in both. The index
+  was global before accounts, which would have stopped a second person from ever
+  saving a restaurant someone else already had and handed them the other person's
+  row to edit.
 - **Every read needs a `user_id` in its `WHERE` clause.** `/api/places`, `/api/stats`
   and `/api/tags` all scope to one account; `PUT` and `DELETE` scope to the caller's,
   so someone else's row reads as `404` rather than `403`. A new route that forgets

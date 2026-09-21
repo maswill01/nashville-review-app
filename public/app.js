@@ -534,6 +534,53 @@ function closeSheet() {
   document.body.style.overflow = '';
 }
 
+const fillBlank = (sel, value) => {
+  const el = $(sel);
+  if (!el.value && value !== null && value !== undefined) el.value = value;
+};
+
+// A collision the server did not resolve on its own (it moves wishlist -> been by
+// itself): point the open sheet at the row that already exists, so saving again
+// updates it instead of making a second copy. Deliberately not openSheet(place) —
+// that repaints every control from the row and throws away the entry that was
+// just typed, which is the part worth keeping.
+function adoptExistingPlace(place) {
+  state.editingId = place.id;
+  $('#f-id').value = place.id;
+  $('#sheet-title').textContent = 'Edit place';
+  $('#delete-btn').hidden = false;
+
+  // Moving a place you have already rated onto the wishlist nulls the rating, the
+  // date and "would go back" — and the wishlist half of the form shows none of
+  // them, so it would happen out of sight. Hold it on "been" and let the status be
+  // changed deliberately from here.
+  if (place.status === 'visited') $('#f-status').value = 'visited';
+
+  // Anything left blank falls back to the row, so details that are not on screen —
+  // who recommended it, notes written when it went on the list — survive the save.
+  fillBlank('#f-name', place.name);
+  fillBlank('#f-address', place.address);
+  fillBlank('#f-lat', place.lat);
+  fillBlank('#f-lng', place.lng);
+  fillBlank('#f-place-id', place.place_id);
+  fillBlank('#f-place-provider', place.place_provider);
+  fillBlank('#f-source', place.source);
+  fillBlank('#f-notes', place.notes);
+  fillBlank('#f-visit-date', place.visit_date ? place.visit_date.slice(0, 10) : null);
+  if (!$('#f-would-return').checked) $('#f-would-return').checked = Boolean(place.would_return);
+  if (!readNeighborhood()) setNeighborhood(place.neighborhood ?? '');
+  if (state.price === null) setPrice(place.price ?? null);
+  if (state.rating === null) setRating(place.rating ?? null);
+
+  // Tags are a set, so keep both lots rather than picking one.
+  state.tags = normalizeTags(`${place.tags || ''},${state.tags.join(', ')}`);
+  renderTags();
+
+  syncStatusFields();
+  updatePlaceHint();
+  syncSaveState();
+}
+
 async function save(event) {
   event.preventDefault();
   commitTagEntry();
@@ -571,17 +618,21 @@ async function save(event) {
       await api(`/api/places/${state.editingId}`, { method: 'PUT', body: JSON.stringify(payload) });
       toast('Updated');
     } else {
-      await api('/api/places', { method: 'POST', body: JSON.stringify(payload) });
-      toast('Added');
+      // The server moves a place off the wishlist rather than refusing the save,
+      // so a POST can come back having updated a row instead of adding one.
+      const saved = await api('/api/places', { method: 'POST', body: JSON.stringify(payload) });
+      toast(saved?.moved_from === 'wishlist' ? 'Moved to Been' : 'Added');
     }
     closeSheet();
     await Promise.all([load(), loadTagVocab()]);
   } catch (err) {
-    // The same place picked twice: open the row that already exists instead of
-    // stranding the user on an error they cannot act on.
+    // A duplicate the server left for the user to settle. Keep the sheet open on
+    // the existing row with the entry intact; one more tap on Save updates it.
     if (err.status === 409 && err.body?.place) {
-      toast('Already on your list — opening it.');
-      openSheet(err.body.place);
+      adoptExistingPlace(err.body.place);
+      toast(err.body.place.status === 'wishlist'
+        ? 'Already on Want to go — save again to update it.'
+        : 'Already on Been — save again to update it.');
       return;
     }
     toast(err.message);

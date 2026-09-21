@@ -145,7 +145,7 @@ All endpoints require the login cookie except `/api/health`, `/api/login` and
 | `GET`    | `/api/places`      | Filters: `status`, `category`, `q`, `sort`, `user` |
 | `GET`    | `/api/tags`        | Your tags in use with counts, for autocomplete   |
 | `GET`    | `/api/place-search`| Proxied provider lookup: `q`                     |
-| `POST`   | `/api/places`      | Create — `409` if that place id is already saved |
+| `POST`   | `/api/places`      | Create. A place already on your wishlist is moved to visited instead (`200`, `moved_from`); any other clash on that place id is `409` with the existing row |
 | `PUT`    | `/api/places/:id`  | Update                                           |
 | `DELETE` | `/api/places/:id`  | Delete                                           |
 | `GET`    | `/api/stats`       | Counts and average rating; takes `user`          |
